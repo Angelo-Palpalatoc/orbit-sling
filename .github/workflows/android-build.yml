@@ -36,8 +36,10 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Gradle cache
+      - name: Setup Gradle 8.14.3 & cache
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
 
       - name: Install dependencies
         run: npm ci
@@ -51,11 +53,15 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
-      - name: Build installable offline APK (debug)
+      - name: Verify Gradle wrapper version
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew --version
+
+      - name: Build installable offline APK (debug)
+        working-directory: android
+        run: ./gradlew assembleDebug
 
       - name: Build Play Store App Bundle (unsigned release AAB)
         working-directory: android
