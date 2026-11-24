@@ -1,5 +1,7 @@
 # Orbit Sling
 
+**[Play Live Demo →](https://orbit-sling-gamma.vercel.app/)**
+
 A minimalist 60fps orbital slingshot arcade game built with TypeScript, HTML5 Canvas 2D, and zero-asset procedural Web Audio.
 
 Drag anywhere to pull back, watch gravity—and anti-gravity—bend your live trajectory preview through orbital anchors, and chain clean captures across **Endless** mode or a **5-Chapter, 50-Sector Adventure Campaign**.
@@ -14,7 +16,7 @@ Drag anywhere to pull back, watch gravity—and anti-gravity—bend your live tr
 - **Overdrive Boost Anchors:** Supercharged gold anchors amplify launch velocity to vault across wide deep-space gaps.
 - **Combo Multiplier, Anchor Skips & Energy Shards:** Chain consecutive new-anchor captures to build your combo (`x2`, `x3`, …), skip anchors for bonus points, and curve through floating shards.
 - **Adventure Mode (5 Chapters · 50 Sectors & 150-Star Mastery):** Switch between **Endless** and **Adventure** on the start screen (deep-linkable via `?mode=adventure` or `?mode=adventure&sector=14`). Browse all 5 chapters (**01 Low Orbit**, **02 Repulsor Field**, **03 Aegis Array**, **04 Overdrive Relay**, and **05 Event Horizon**—the full-system mastery remix) with the compact chapter pager, reach each sector's Extraction Goal, and collect up to **150 stars** (3 per sector: Extraction Clear, Shard Target, and Max Combo) with progress saved in `localStorage`.
-- **1-Tap Shareable Results:** Copy or natively share formatted telemetry summaries (chapter, sector, stars, score, max combo, and deep link) directly from Victory and Game Over screens.
+- **Share Sheet & Challenge Links (`?beat=N`):** Open the Share modal from Victory or Game Over to preview and save a 1080×1080 procedural PNG telemetry score card, share directly to Facebook, Instagram (auto-copies challenge link for Story Link Stickers), or X, or copy a visual emoji flight trace + `"Can you beat N?"` challenge link.
 
 ## Controls
 
