@@ -1,0 +1,273 @@
+export interface Vec2 {
+  x: number;
+  y: number;
+}
+
+export type GameStatus = 'ready' | 'playing' | 'gameover';
+
+export type ProbeMode = 'orbiting' | 'flying' | 'crashed';
+
+export type GameOverReason =
+  | 'OUT_OF_SECTOR'
+  | 'ORBIT_DECAYED'
+  | 'DRONE_COLLISION';
+
+export interface HazardDrone {
+  id: number;
+  orbitRadius: number;
+  angle: number;
+  angularSpeed: number; // rad/s (signed for CW/CCW)
+  radius: number;
+  /** World-space position kept up-to-date each physics step */
+  x: number;
+  y: number;
+}
+
+export interface Anchor {
+  id: number;
+  index: number; // 0 = starting anchor, increments upward
+  x: number;
+  y: number;
+  baseX: number;
+  baseY: number;
+  coreRadius: number;
+  orbitRadius: number;
+  captureRadius: number;
+  gravityStrength: number; // GM constant in world units^3 / s^2
+  gravityRange: number;
+  /** Horizontal drift parameters (active on higher scores) */
+  driftAmplitude: number;
+  driftSpeed: number;
+  driftPhase: number;
+  /** Decay ring state once captured */
+  hasDecay: boolean;
+  decayDuration: number; // total seconds before collapse
+  decayRemaining: number; // remaining seconds
+  decayActive: boolean;
+  visited: boolean;
+  /** Visual capture pulse timer (0..1, decays to 0) */
+  capturePulse: number;
+  drones: HazardDrone[];
+}
+
+export interface EnergyShard {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  collected: boolean;
+  pulsePhase: number;
+  value: number;
+}
+
+export interface TrailPoint {
+  x: number;
+  y: number;
+  age: number; // seconds since recorded
+}
+
+export interface Probe {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  mode: ProbeMode;
+  anchorId: number | null;
+  launchAnchorId: number | null;
+  flightTime: number;
+  orbitAngle: number;
+  orbitAngularSpeed: number; // signed rad/s
+  orbitDirection: 1 | -1;
+  /** Smoothly blends radial distance into anchor.orbitRadius on capture */
+  orbitRadiusCurrent: number;
+  trail: TrailPoint[];
+}
+
+export interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  color: string;
+  alpha: number;
+  life: number;
+  maxLife: number;
+}
+
+export interface Shockwave {
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  color: string;
+  life: number;
+  maxLife: number;
+  lineWidth: number;
+}
+
+export interface FloatingText {
+  x: number;
+  y: number;
+  vy: number;
+  text: string;
+  color: string;
+  life: number;
+  maxLife: number;
+  scale: number;
+}
+
+export interface TrajectoryPoint {
+  x: number;
+  y: number;
+  t: number;
+}
+
+export interface AimState {
+  active: boolean;
+  /** Screen-space drag origin and current point (CSS pixels) */
+  startScreen: Vec2;
+  currentScreen: Vec2;
+  /** Normalized power 0..1 */
+  power: number;
+  /** True when pull distance exceeds minimum launch threshold */
+  valid: boolean;
+  /** Computed launch velocity vector in world units/s */
+  launchVelocity: Vec2;
+  /** Predicted trajectory computed with exact engine gravity step */
+  trajectory: TrajectoryPoint[];
+  /** Anchor ID intersected by the predicted trajectory, if any */
+  lockedAnchorId: number | null;
+  /** True if predicted trajectory hits a hazard drone */
+  hitsHazard: boolean;
+}
+
+export interface CameraState {
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  shakeMagnitude: number;
+  shakeOffsetX: number;
+  shakeOffsetY: number;
+}
+
+export interface Star {
+  /** Normalized wrap coordinates in parallax space */
+  x: number;
+  y: number;
+  size: number;
+  alpha: number;
+  depth: number; // 0.12 (far) .. 0.45 (near)
+  twinklePhase: number;
+  tint: string;
+}
+
+export type GameEvent =
+  | { type: 'launch'; power: number }
+  | { type: 'capture'; combo: number; points: number; skipped: number; isNewAnchor: boolean }
+  | { type: 'shard'; combo: number; points: number }
+  | { type: 'decayWarning'; urgency: number }
+  | { type: 'crash'; reason: GameOverReason };
+
+export interface ViewportMetrics {
+  width: number; // CSS pixels
+  height: number; // CSS pixels
+  dpr: number;
+  viewScale: number;
+  anchorScreenYRatio: number; // vertical screen ratio for camera.y (0.68)
+}
+
+export interface GameState {
+  status: GameStatus;
+  score: number;
+  bestScore: number;
+  isNewBest: boolean;
+  combo: number;
+  maxCombo: number;
+  anchorsCaptured: number;
+  gameOverReason: GameOverReason | null;
+  gameOverElapsed: number;
+  elapsed: number;
+  hitStopRemaining: number;
+  probe: Probe;
+  anchors: Anchor[];
+  shards: EnergyShard[];
+  particles: Particle[];
+  shockwaves: Shockwave[];
+  floatingTexts: FloatingText[];
+  aim: AimState;
+  camera: CameraState;
+}
+
+export const PALETTE = {
+  bg: '#0B101B',
+  bgDeep: '#070B13',
+  cyan: '#38BDF8',
+  cyanSoft: '#7DD3FC',
+  gold: '#F5B841',
+  goldSoft: '#FCD34D',
+  coral: '#F43F5E',
+  coralSoft: '#FB7185',
+  white: '#F8FAFC',
+  slateLight: '#CBD5E1',
+  slate: '#94A3B8',
+  slateMuted: '#475569',
+  slateDark: '#1E293B',
+} as const;
+
+export const PHYSICS = {
+  FIXED_DT: 1 / 120,
+  WORLD_WIDTH: 520,
+  WORLD_HEIGHT: 760,
+  ANCHOR_SCREEN_Y_RATIO: 0.68,
+  MIN_PULL_PX: 16,
+  MAX_PULL_PX: 145,
+  MIN_LAUNCH_SPEED: 290,
+  MAX_LAUNCH_SPEED: 740,
+  LAUNCH_GRACE_TIME: 0.28,
+  AIM_TIME_SCALE: 0.42,
+  TRAJECTORY_STEPS: 108,
+  TRAJECTORY_SAMPLE_STRIDE: 3,
+} as const;
+
+export function computeViewportMetrics(width: number, height: number, dpr: number): ViewportMetrics {
+  const safeW = Math.max(1, width);
+  const safeH = Math.max(1, height);
+  const viewScale = Math.min(safeW / PHYSICS.WORLD_WIDTH, safeH / PHYSICS.WORLD_HEIGHT);
+  return {
+    width: safeW,
+    height: safeH,
+    dpr: Math.max(1, Math.min(dpr, 3)),
+    viewScale,
+    anchorScreenYRatio: PHYSICS.ANCHOR_SCREEN_Y_RATIO,
+  };
+}
+
+export function worldToScreen(
+  worldX: number,
+  worldY: number,
+  camera: CameraState,
+  viewport: ViewportMetrics
+): Vec2 {
+  const cx = camera.x + camera.shakeOffsetX;
+  const cy = camera.y + camera.shakeOffsetY;
+  return {
+    x: viewport.width * 0.5 + (worldX - cx) * viewport.viewScale,
+    y: viewport.height * viewport.anchorScreenYRatio + (worldY - cy) * viewport.viewScale,
+  };
+}
+
+export function screenToWorld(
+  screenX: number,
+  screenY: number,
+  camera: CameraState,
+  viewport: ViewportMetrics
+): Vec2 {
+  return {
+    x: (screenX - viewport.width * 0.5) / viewport.viewScale + camera.x,
+    y: (screenY - viewport.height * viewport.anchorScreenYRatio) / viewport.viewScale + camera.y,
+  };
+}
+
