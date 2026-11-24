@@ -1,0 +1,43 @@
+{
+  "id": "/",
+  "name": "Orbit Sling",
+  "short_name": "Orbit Sling",
+  "description": "A minimalist 60fps orbital slingshot arcade game with Endless mode and a 50-sector Adventure campaign.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#0B101B",
+  "theme_color": "#0B101B",
+  "categories": ["games", "arcade"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/og-card.png",
+      "sizes": "1200x630",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Orbit Sling orbital slingshot arcade gameplay"
+    }
+  ]
+}
