@@ -9,6 +9,9 @@ dist/
 .env
 .env.*
 *.local
+*.keystore
+*.jks
+signing-key-info.txt
 
 # Editor & OS files
 .vscode/*

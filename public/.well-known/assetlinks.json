@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.angelopalpalatoc.orbitsling",
+      "sha256_cert_fingerprints": [
+        "8A:90:CB:E4:55:90:8D:14:8B:04:D7:7E:08:87:0E:12:38:19:6D:5A:0F:95:9D:CA:76:83:41:D7:EC:9F:FF:DF"
+      ]
+    }
+  }
+]
