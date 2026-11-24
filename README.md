@@ -12,6 +12,8 @@ Drag anywhere to pull back, watch gravity bend your live trajectory preview thro
 - **Combo Multiplier & Anchor Skips:** Chain consecutive new-anchor captures to build your combo multiplier (`x2`, `x3`, …) and skip past intermediate anchors for bonus points.
 - **Energy Shards:** Curve your flight path through floating shards between orbits for extra score.
 - **Progressive Difficulty:** As you climb, anchors introduce lateral drift, tighter decay timers, and orbiting hazard drones.
+- **Adventure Mode (10 Curated Sectors, Extraction Goal & 3-Star Mastery):** Switch between **Endless** and **Adventure** right on the start screen (deep-linkable via `?mode=adventure` or `?mode=adventure&sector=4`). Clear 10 handcrafted sectors—each introducing a distinct telemetry twist from gravity bends and decay rushes to twin sentinel patrols—reach the Extraction Goal, and master all 3 stars per sector (Extraction Clear, Shard Target, and Max Combo) with progress saved in `localStorage`.
+- **1-Tap Shareable Results:** Copy or natively share formatted telemetry summaries (stars, sector progress, score, max combo, and deep link) directly from Victory and Game Over screens.
 
 ## Controls
 
@@ -22,7 +24,7 @@ Drag anywhere to pull back, watch gravity bend your live trajectory preview thro
 | **Tap outside card** (Game Over) | Quick restart |
 | **`R`** | Instant restart |
 | **`M`** | Toggle sound mute (persisted in `localStorage`) |
-| **`Space` / `Enter`** (Game Over) | Quick restart |
+| **`Space` / `Enter`** (Victory / Game Over) | Next sector on Victory (or replay finale) / quick restart on Game Over |
 | **`Esc`** | Cancel active aim |
 
 ## Tech Stack

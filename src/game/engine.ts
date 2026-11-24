@@ -1,17 +1,28 @@
 import {
+  ADVENTURE_SECTORS,
+  getHighestUnlockedSectorId,
+  getSectorById,
+  loadAdventureProgress,
+  saveAdventureProgress,
+} from './levels';
+import {
   PALETTE,
   PHYSICS,
+  type AdventureRunSummary,
   type AimState,
   type Anchor,
   type CameraState,
   type EnergyShard,
   type FloatingText,
   type GameEvent,
+  type GameMode,
   type GameOverReason,
   type GameState,
   type HazardDrone,
   type Particle,
   type Probe,
+  type SectorDefinition,
+  type SectorProgress,
   type Shockwave,
   type TrajectoryPoint,
   type Vec2,
@@ -19,6 +30,25 @@ import {
 } from './types';
 
 const BEST_SCORE_STORAGE_KEY = 'orbit-sling-best-v1';
+
+function hashSeedString(input: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+export function createSeededRng(seed: number): () => number {
+  let state = seed >>> 0;
+  return (): number => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 const TUNING = {
   MAX_RAW_DT: 0.05,
@@ -59,10 +89,10 @@ function randomRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-function loadBestScore(): number {
+function loadBestScore(storageKey: string): number {
   try {
     if (typeof localStorage === 'undefined') return 0;
-    const raw = localStorage.getItem(BEST_SCORE_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return 0;
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -71,10 +101,10 @@ function loadBestScore(): number {
   }
 }
 
-function saveBestScore(score: number): void {
+function saveBestScore(storageKey: string, score: number): void {
   try {
     if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(BEST_SCORE_STORAGE_KEY, String(Math.max(0, Math.floor(score))));
+    localStorage.setItem(storageKey, String(Math.max(0, Math.floor(score))));
   } catch {
     // Ignore storage quota / privacy mode errors
   }
@@ -154,14 +184,100 @@ export class GameEngine {
   private decayWarnCooldown = 0;
   private currentMaxPullPx: number = PHYSICS.MAX_PULL_PX;
   private readonly previewAnchorX: number[] = [];
+  private endlessBestScore = 0;
+  private adventureProgress: Record<number, SectorProgress>;
+  private levelRng: () => number = Math.random;
 
-  constructor(onEvent?: (event: GameEvent) => void) {
+  constructor(
+    onEvent?: (event: GameEvent) => void,
+    initialMode: GameMode = 'endless',
+    initialSectorId?: number
+  ) {
     this.onEvent = onEvent;
-    this.state = this.createBlankState(loadBestScore());
+    this.adventureProgress = loadAdventureProgress();
+    const highestUnlocked = this.getHighestUnlockedSectorId();
+    const resolvedSectorId =
+      initialSectorId !== undefined
+        ? clamp(Math.floor(initialSectorId), 1, highestUnlocked)
+        : highestUnlocked;
+    this.endlessBestScore = loadBestScore(BEST_SCORE_STORAGE_KEY);
+    const initialBest =
+      initialMode === 'adventure'
+        ? (this.adventureProgress[resolvedSectorId]?.bestScore ?? 0)
+        : this.endlessBestScore;
+
+    this.state = this.createBlankState(initialMode, resolvedSectorId, initialBest);
     this.reset();
   }
 
-  private createBlankState(bestScore: number): GameState {
+  setMode(mode: GameMode, sectorId?: number): void {
+    if (mode === 'adventure') {
+      const highestUnlocked = this.getHighestUnlockedSectorId();
+      const targetSectorId = clamp(
+        Math.floor(sectorId ?? (this.state.adventureSectorId || highestUnlocked)),
+        1,
+        highestUnlocked
+      );
+      if (
+        this.state.mode === 'adventure' &&
+        this.state.status === 'ready' &&
+        this.state.adventureSectorId === targetSectorId
+      ) {
+        return;
+      }
+      this.state.mode = 'adventure';
+      this.state.adventureSectorId = targetSectorId;
+      this.reset();
+      return;
+    }
+
+    if (this.state.mode === mode && this.state.status === 'ready') {
+      return;
+    }
+    this.state.mode = mode;
+    this.reset();
+  }
+
+  selectSector(sectorId: number): void {
+    const highestUnlocked = this.getHighestUnlockedSectorId();
+    const clamped = clamp(Math.floor(sectorId), 1, highestUnlocked);
+    this.state.mode = 'adventure';
+    this.state.adventureSectorId = clamped;
+    this.reset();
+  }
+
+  nextSector(): boolean {
+    const nextId = this.state.adventureSectorId + 1;
+    if (
+      this.state.adventureSectorId < ADVENTURE_SECTORS.length &&
+      nextId <= this.getHighestUnlockedSectorId()
+    ) {
+      this.selectSector(nextId);
+      return true;
+    }
+    return false;
+  }
+
+  getAdventureProgress(): Record<number, SectorProgress> {
+    const copy: Record<number, SectorProgress> = {};
+    for (const sector of ADVENTURE_SECTORS) {
+      const entry = this.adventureProgress[sector.id];
+      if (entry) {
+        copy[sector.id] = { ...entry };
+      }
+    }
+    return copy;
+  }
+
+  getHighestUnlockedSectorId(): number {
+    return getHighestUnlockedSectorId(this.adventureProgress);
+  }
+
+  private createBlankState(
+    mode: GameMode,
+    adventureSectorId: number,
+    bestScore: number
+  ): GameState {
     const startProbe: Probe = {
       x: 0,
       y: -TUNING.START_ORBIT_RADIUS,
@@ -181,12 +297,19 @@ export class GameEngine {
 
     return {
       status: 'ready',
+      mode,
       score: 0,
       bestScore,
       isNewBest: false,
       combo: 0,
       maxCombo: 0,
       anchorsCaptured: 0,
+      shardsCollected: 0,
+      adventureSectorId,
+      adventureTotalAnchors: 0,
+      adventureCurrentAnchorIndex: 0,
+      adventureTotalShards: 0,
+      adventureSummary: null,
       gameOverReason: null,
       gameOverElapsed: 0,
       elapsed: 0,
@@ -203,7 +326,27 @@ export class GameEngine {
   }
 
   reset(): void {
-    const persistedBest = Math.max(this.state.bestScore, loadBestScore());
+    const isAdventure = this.state.mode === 'adventure';
+    let activeSector: SectorDefinition | null = null;
+
+    if (isAdventure) {
+      const highestUnlocked = this.getHighestUnlockedSectorId();
+      const clampedSectorId = clamp(Math.floor(this.state.adventureSectorId), 1, highestUnlocked);
+      this.state.adventureSectorId = clampedSectorId;
+      activeSector = getSectorById(clampedSectorId);
+      // Dedicated deterministic PRNG stream for Adventure sectors (isolated from cosmetic VFX)
+      this.levelRng = createSeededRng(
+        hashSeedString(`orbit-sling-adventure:${activeSector.seed}`)
+      );
+      this.state.bestScore = this.adventureProgress[activeSector.id]?.bestScore ?? 0;
+    } else {
+      this.levelRng = Math.random;
+      this.endlessBestScore = Math.max(
+        this.endlessBestScore,
+        loadBestScore(BEST_SCORE_STORAGE_KEY)
+      );
+      this.state.bestScore = this.endlessBestScore;
+    }
 
     this.nextEntityId = 1;
     this.highestVisitedIndex = 0;
@@ -213,11 +356,15 @@ export class GameEngine {
 
     this.state.status = 'ready';
     this.state.score = 0;
-    this.state.bestScore = persistedBest;
     this.state.isNewBest = false;
     this.state.combo = 0;
     this.state.maxCombo = 0;
     this.state.anchorsCaptured = 0;
+    this.state.shardsCollected = 0;
+    this.state.adventureTotalAnchors = 0;
+    this.state.adventureCurrentAnchorIndex = 0;
+    this.state.adventureTotalShards = 0;
+    this.state.adventureSummary = null;
     this.state.gameOverReason = null;
     this.state.gameOverElapsed = 0;
     this.state.elapsed = 0;
@@ -259,6 +406,7 @@ export class GameEngine {
       decayRemaining: 0,
       decayActive: false,
       visited: true,
+      isGoal: false,
       capturePulse: 0,
       drones: [],
     };
@@ -294,7 +442,17 @@ export class GameEngine {
       });
     }
 
-    this.ensureAnchorsAhead();
+    if (activeSector) {
+      for (let i = 1; i <= activeSector.anchorCount; i++) {
+        this.spawnAdventureAnchor(activeSector, i);
+      }
+      this.state.adventureTotalAnchors = activeSector.anchorCount;
+      this.state.adventureCurrentAnchorIndex = 0;
+      this.state.adventureTotalShards = this.state.shards.length;
+      this.state.adventureSummary = null;
+    } else {
+      this.ensureAnchorsAhead();
+    }
   }
 
   canQuickRestart(): boolean {
@@ -305,7 +463,11 @@ export class GameEngine {
   }
 
   beginAim(screenX: number, screenY: number, viewport: ViewportMetrics): void {
-    if (this.state.status === 'gameover' || this.state.probe.mode !== 'orbiting') {
+    if (
+      this.state.status === 'gameover' ||
+      this.state.status === 'victory' ||
+      this.state.probe.mode !== 'orbiting'
+    ) {
       return;
     }
 
@@ -328,7 +490,12 @@ export class GameEngine {
 
   updateAim(screenX: number, screenY: number, viewport: ViewportMetrics): void {
     const aim = this.state.aim;
-    if (!aim.active || this.state.status === 'gameover' || this.state.probe.mode !== 'orbiting') {
+    if (
+      !aim.active ||
+      this.state.status === 'gameover' ||
+      this.state.status === 'victory' ||
+      this.state.probe.mode !== 'orbiting'
+    ) {
       return;
     }
 
@@ -347,6 +514,7 @@ export class GameEngine {
       !aim.active ||
       !aim.valid ||
       this.state.status === 'gameover' ||
+      this.state.status === 'victory' ||
       probe.mode !== 'orbiting'
     ) {
       this.clearAim();
@@ -418,6 +586,16 @@ export class GameEngine {
       // Let ambient motion (drifting anchors & drones) continue gently behind the game-over overlay
       this.advanceWorldBodies(dt * 0.35);
       this.ageTrail(dt);
+      return;
+    }
+
+    if (this.state.status === 'victory') {
+      // Keep probe gently orbiting the Extraction anchor behind the Victory overlay
+      const gentleDt = dt * 0.55;
+      this.advanceWorldBodies(gentleDt);
+      this.stepOrbitingProbe(gentleDt);
+      this.ageTrail(gentleDt);
+      this.recordTrailPoint(this.state.probe.x, this.state.probe.y);
       return;
     }
 
@@ -612,6 +790,7 @@ export class GameEngine {
       const dy = probe.y - shard.y;
       if (dx * dx + dy * dy <= pickupRadius * pickupRadius) {
         shard.collected = true;
+        this.state.shardsCollected += 1;
         const points = Math.max(1, this.state.combo) * shard.value;
         this.addScore(points);
 
@@ -665,6 +844,13 @@ export class GameEngine {
     anchor.capturePulse = 1.0;
     this.decayWarnCooldown = 0;
 
+    if (this.state.mode === 'adventure') {
+      this.state.adventureCurrentAnchorIndex = Math.max(
+        this.state.adventureCurrentAnchorIndex,
+        anchor.index
+      );
+    }
+
     if (!anchor.visited) {
       const skipped = Math.max(0, anchor.index - this.highestVisitedIndex - 1);
       anchor.visited = true;
@@ -702,6 +888,11 @@ export class GameEngine {
         isNewAnchor: true,
       });
 
+      if (this.state.mode === 'adventure' && anchor.isGoal) {
+        this.triggerVictory(anchor);
+        return;
+      }
+
       this.ensureAnchorsAhead();
       this.pruneBehindCamera();
     } else {
@@ -728,8 +919,71 @@ export class GameEngine {
     }
   }
 
+  private triggerVictory(anchor: Anchor): void {
+    if (this.state.status === 'victory') return;
+
+    const sector = getSectorById(this.state.adventureSectorId);
+    this.state.status = 'victory';
+    this.clearAim();
+
+    const starCleared = true;
+    const totalShards = this.state.adventureTotalShards;
+    const shardTarget =
+      totalShards === 0 ? 0 : Math.max(1, Math.ceil(totalShards * sector.shardStarRatio));
+    const starShards = totalShards === 0 ? true : this.state.shardsCollected >= shardTarget;
+    const starCombo = this.state.maxCombo >= sector.minComboForStar;
+    const starsEarned = 1 + (starShards ? 1 : 0) + (starCombo ? 1 : 0);
+
+    const prevProgress = this.adventureProgress[sector.id];
+    const prevBest = prevProgress?.bestScore ?? 0;
+    const nextBest = Math.max(prevBest, this.state.bestScore, this.state.score);
+    if (this.state.score > prevBest && !this.state.isNewBest) {
+      this.state.isNewBest = true;
+    }
+    this.state.bestScore = nextBest;
+
+    this.adventureProgress[sector.id] = {
+      cleared: true,
+      stars: Math.max(prevProgress?.stars ?? 0, starsEarned),
+      bestScore: nextBest,
+    };
+    saveAdventureProgress(this.adventureProgress);
+
+    const summary: AdventureRunSummary = {
+      sectorId: sector.id,
+      sectorCode: sector.code,
+      sectorName: sector.name,
+      starsEarned,
+      starCleared,
+      starShards,
+      starCombo,
+      shardsCollected: this.state.shardsCollected,
+      totalShards,
+      shardTarget,
+      maxCombo: this.state.maxCombo,
+      comboTarget: sector.minComboForStar,
+      hasNextSector: sector.id < ADVENTURE_SECTORS.length,
+    };
+    this.state.adventureSummary = summary;
+
+    this.state.hitStopRemaining = 0.055;
+    this.addCameraShake(6.5);
+    this.spawnShockwave(anchor.x, anchor.y, anchor.captureRadius * 1.9, PALETTE.gold, 0.58, 3.2);
+    this.spawnShockwave(anchor.x, anchor.y, anchor.captureRadius * 1.4, PALETTE.cyan, 0.44, 2.4);
+    this.spawnBurstParticles(anchor.x, anchor.y, 30, PALETTE.gold, PALETTE.cyan, 85, 250);
+    this.spawnFloatingText(
+      anchor.x,
+      anchor.y - anchor.captureRadius * 0.92,
+      'EXTRACTED!',
+      PALETTE.gold,
+      1.3
+    );
+
+    this.emit({ type: 'victory', sectorId: sector.id, stars: starsEarned });
+  }
+
   private triggerCrash(reason: GameOverReason, decayingAnchor: Anchor | null): void {
-    if (this.state.status === 'gameover') return;
+    if (this.state.status === 'gameover' || this.state.status === 'victory') return;
 
     this.state.status = 'gameover';
     this.state.probe.mode = 'crashed';
@@ -915,6 +1169,9 @@ export class GameEngine {
   }
 
   private ensureAnchorsAhead(): void {
+    if (this.state.mode === 'adventure') {
+      return;
+    }
     const targetMaxIndex = this.highestVisitedIndex + TUNING.AHEAD_ANCHOR_BUFFER;
     while (
       this.state.anchors.length > 0 &&
@@ -922,6 +1179,144 @@ export class GameEngine {
     ) {
       this.spawnNextAnchor();
     }
+  }
+
+  private spawnAdventureAnchor(sector: SectorDefinition, index: number): void {
+    const prev = this.state.anchors[this.state.anchors.length - 1];
+    const isGoal = index === sector.anchorCount;
+    const progress =
+      sector.anchorCount > 1 ? clamp((index - 1) / (sector.anchorCount - 1), 0, 1) : 1;
+
+    const captureRadius = isGoal
+      ? 78
+      : clamp(lerp(70, 56, progress) * sector.captureRadiusScale, 46, 78);
+    const orbitRadius = isGoal ? 50 : clamp(captureRadius * 0.64, 33, 48);
+    const coreRadius = isGoal ? 17 : lerp(15, 11.5, progress);
+    const gravityStrength =
+      lerp(
+        TUNING.GRAVITY_STRENGTH_MIN,
+        TUNING.GRAVITY_STRENGTH_MAX,
+        isGoal ? 0.5 : progress
+      ) * sector.gravityMultiplier;
+    const gravityRange = captureRadius * 3.2 + 45;
+
+    let dy = clamp(lerp(205, 240, progress) + this.levelRange(-12, 20), 195, 260);
+
+    const maxAbsX = isGoal ? 135 : 175;
+    let sideSign: number;
+    if (prev.baseX > 35) {
+      sideSign = this.levelRng() < 0.82 ? -1 : 1;
+    } else if (prev.baseX < -35) {
+      sideSign = this.levelRng() < 0.82 ? 1 : -1;
+    } else {
+      sideSign = this.levelRng() < 0.5 ? -1 : 1;
+    }
+
+    const desiredDx = sideSign * this.levelRange(65, 165);
+    let baseX = clamp(prev.baseX + desiredDx, -maxAbsX, maxAbsX);
+
+    if (Math.abs(baseX - prev.baseX) < 65) {
+      const flipSign = prev.baseX > 0 ? -1 : 1;
+      baseX = clamp(prev.baseX + flipSign * this.levelRange(75, 145), -maxAbsX, maxAbsX);
+    }
+
+    const maxCenterDist = 302;
+    const minCenterDist = prev.captureRadius + captureRadius + 55;
+
+    let dx = baseX - prev.baseX;
+    let centerDist = Math.hypot(dx, dy);
+
+    if (centerDist > maxCenterDist) {
+      const maxAllowedDx = Math.sqrt(Math.max(0, maxCenterDist * maxCenterDist - dy * dy));
+      dx = clamp(dx, -maxAllowedDx, maxAllowedDx);
+      baseX = clamp(prev.baseX + dx, -maxAbsX, maxAbsX);
+      centerDist = Math.hypot(baseX - prev.baseX, dy);
+    }
+
+    if (centerDist < minCenterDist) {
+      const neededDy = Math.sqrt(Math.max(0, minCenterDist * minCenterDist - dx * dx));
+      dy = clamp(Math.max(dy, neededDy), 195, 265);
+    }
+
+    const baseY = prev.baseY - dy;
+
+    let driftAmplitude = 0;
+    let driftSpeed = 0;
+    let driftPhase = 0;
+    if (!isGoal && sector.driftChance > 0 && index >= 2 && this.levelRng() < sector.driftChance) {
+      const desiredAmp = this.levelRange(24, 52);
+      const maxRoom = Math.min(170 - baseX, baseX + 170);
+      if (maxRoom >= 20) {
+        driftAmplitude = Math.min(desiredAmp, maxRoom);
+      } else {
+        baseX = clamp(baseX, -140, 140);
+        driftAmplitude = Math.min(desiredAmp, 170 - Math.abs(baseX));
+      }
+      driftSpeed = this.levelRange(0.65, 1.1) * sector.driftSpeedScale;
+      driftPhase = this.levelRng() * Math.PI * 2;
+    }
+
+    const initialX =
+      driftAmplitude > 0
+        ? baseX + Math.sin(this.state.elapsed * driftSpeed + driftPhase) * driftAmplitude
+        : baseX;
+
+    const hasDecay = !isGoal && sector.decayDuration > 0;
+    const decayDuration = hasDecay ? sector.decayDuration : 0;
+
+    const drones: HazardDrone[] = [];
+    if (!isGoal && sector.droneChance > 0 && index >= 2 && this.levelRng() < sector.droneChance) {
+      const twoDrones =
+        sector.dualDroneChance > 0 && this.levelRng() < sector.dualDroneChance;
+      const droneCount = twoDrones ? 2 : 1;
+      const droneOrbitRadius = captureRadius + 16;
+      const startAngle = this.levelRng() * Math.PI * 2;
+      const angularSpeed =
+        (this.levelRng() < 0.5 ? 1 : -1) *
+        this.levelRange(1.1, 1.75) *
+        sector.droneSpeedScale;
+
+      for (let d = 0; d < droneCount; d++) {
+        const angle = startAngle + (d === 1 ? Math.PI : 0);
+        drones.push({
+          id: this.allocateId(),
+          orbitRadius: droneOrbitRadius,
+          angle,
+          angularSpeed,
+          radius: TUNING.DRONE_RADIUS,
+          x: initialX + Math.cos(angle) * droneOrbitRadius,
+          y: baseY + Math.sin(angle) * droneOrbitRadius,
+        });
+      }
+    }
+
+    const nextAnchor: Anchor = {
+      id: this.allocateId(),
+      index,
+      x: initialX,
+      y: baseY,
+      baseX,
+      baseY,
+      coreRadius,
+      orbitRadius,
+      captureRadius,
+      gravityStrength,
+      gravityRange,
+      driftAmplitude,
+      driftSpeed,
+      driftPhase,
+      hasDecay,
+      decayDuration,
+      decayRemaining: decayDuration,
+      decayActive: false,
+      visited: false,
+      isGoal,
+      capturePulse: 0,
+      drones,
+    };
+
+    this.state.anchors.push(nextAnchor);
+    this.spawnShardsBetween(prev, nextAnchor);
   }
 
   private spawnNextAnchor(): void {
@@ -939,25 +1334,25 @@ export class GameEngine {
     );
     const gravityRange = captureRadius * 3.2 + 45;
 
-    let dy = clamp(lerp(205, 245, difficulty) + randomRange(-12, 22), 195, 265);
+    let dy = clamp(lerp(205, 245, difficulty) + this.levelRange(-12, 22), 195, 265);
 
     // Choose horizontal side to encourage fun angled slingshot arcs
     let sideSign: number;
     if (prev.baseX > 35) {
-      sideSign = Math.random() < 0.82 ? -1 : 1;
+      sideSign = this.levelRng() < 0.82 ? -1 : 1;
     } else if (prev.baseX < -35) {
-      sideSign = Math.random() < 0.82 ? 1 : -1;
+      sideSign = this.levelRng() < 0.82 ? 1 : -1;
     } else {
-      sideSign = Math.random() < 0.5 ? -1 : 1;
+      sideSign = this.levelRng() < 0.5 ? -1 : 1;
     }
 
-    const desiredDx = sideSign * randomRange(65, 170);
+    const desiredDx = sideSign * this.levelRange(65, 170);
     let baseX = clamp(prev.baseX + desiredDx, -175, 175);
 
     // Ensure minimum horizontal angle so anchors don't stack into a dead-straight column
     if (Math.abs(baseX - prev.baseX) < 65) {
       const flipSign = prev.baseX > 0 ? -1 : 1;
-      baseX = clamp(prev.baseX + flipSign * randomRange(75, 145), -175, 175);
+      baseX = clamp(prev.baseX + flipSign * this.levelRange(75, 145), -175, 175);
     }
 
     // Guarantee center-to-center distance <= 305 and non-overlapping capture rings
@@ -985,18 +1380,18 @@ export class GameEngine {
     let driftAmplitude = 0;
     let driftSpeed = 0;
     let driftPhase = 0;
-    if (index >= 7 && Math.random() < 0.45) {
-      const desiredAmp = randomRange(24, 52);
+    if (index >= 7 && this.levelRng() < 0.45) {
+      const desiredAmp = this.levelRange(24, 52);
       const maxRoom = Math.min(170 - baseX, baseX + 170);
       if (maxRoom >= 20) {
         driftAmplitude = Math.min(desiredAmp, maxRoom);
-        driftSpeed = randomRange(0.65, 1.15);
-        driftPhase = Math.random() * Math.PI * 2;
+        driftSpeed = this.levelRange(0.65, 1.15);
+        driftPhase = this.levelRng() * Math.PI * 2;
       } else {
         baseX = clamp(baseX, -140, 140);
         driftAmplitude = Math.min(desiredAmp, 170 - Math.abs(baseX));
-        driftSpeed = randomRange(0.65, 1.15);
-        driftPhase = Math.random() * Math.PI * 2;
+        driftSpeed = this.levelRange(0.65, 1.15);
+        driftPhase = this.levelRng() * Math.PI * 2;
       }
     }
 
@@ -1012,12 +1407,12 @@ export class GameEngine {
     const drones: HazardDrone[] = [];
     const allowDrones = index >= 5;
     const droneChance = index === 5 ? 1 : lerp(0.62, 0.86, difficulty);
-    if (allowDrones && Math.random() < droneChance) {
-      const twoDrones = index >= 16 && Math.random() < 0.35;
+    if (allowDrones && this.levelRng() < droneChance) {
+      const twoDrones = index >= 16 && this.levelRng() < 0.35;
       const droneCount = twoDrones ? 2 : 1;
       const droneOrbitRadius = captureRadius + 16;
-      const startAngle = Math.random() * Math.PI * 2;
-      const angularSpeed = (Math.random() < 0.5 ? 1 : -1) * randomRange(1.1, 1.85);
+      const startAngle = this.levelRng() * Math.PI * 2;
+      const angularSpeed = (this.levelRng() < 0.5 ? 1 : -1) * this.levelRange(1.1, 1.85);
 
       for (let d = 0; d < droneCount; d++) {
         const angle = startAngle + (d === 1 ? Math.PI : 0);
@@ -1053,6 +1448,7 @@ export class GameEngine {
       decayRemaining: decayDuration,
       decayActive: false,
       visited: false,
+      isGoal: false,
       capturePulse: 0,
       drones,
     };
@@ -1074,14 +1470,14 @@ export class GameEngine {
     // Bias curve slightly toward the arena center so shards stay comfortably playable
     const midX = (prev.baseX + next.baseX) * 0.5;
     const midY = (prev.baseY + next.baseY) * 0.5;
-    const centerBias = midX > 20 ? -1 : midX < -20 ? 1 : Math.random() < 0.5 ? 1 : -1;
+    const centerBias = midX > 20 ? -1 : midX < -20 ? 1 : this.levelRng() < 0.5 ? 1 : -1;
     const curveSign = perpX * centerBias >= 0 ? 1 : -1;
-    const arcOffset = curveSign * randomRange(24, 46);
+    const arcOffset = curveSign * this.levelRange(24, 46);
 
     const ctrlX = clamp(midX + perpX * arcOffset, -205, 205);
     const ctrlY = midY + perpY * arcOffset;
 
-    const shardCount = Math.random() < 0.48 ? 2 : 1;
+    const shardCount = this.levelRng() < 0.48 ? 2 : 1;
     const tValues = shardCount === 2 ? [0.39, 0.61] : [0.5];
 
     for (let i = 0; i < tValues.length; i++) {
@@ -1107,7 +1503,7 @@ export class GameEngine {
         y: sy,
         radius: TUNING.SHARD_RADIUS,
         collected: false,
-        pulsePhase: Math.random() * Math.PI * 2,
+        pulsePhase: this.levelRng() * Math.PI * 2,
         value: 1,
       };
       this.state.shards.push(shard);
@@ -1115,6 +1511,9 @@ export class GameEngine {
   }
 
   private pruneBehindCamera(): void {
+    if (this.state.mode === 'adventure') {
+      return;
+    }
     const cutoffY = this.state.camera.y + TUNING.PRUNE_BELOW_CAMERA;
     const activeAnchorId = this.state.probe.anchorId;
 
@@ -1366,13 +1765,30 @@ export class GameEngine {
     this.state.floatingTexts.push(ft);
   }
 
+  private levelRange(min: number, max: number): number {
+    return min + this.levelRng() * (max - min);
+  }
+
   private addScore(points: number): void {
     if (points <= 0) return;
     this.state.score += points;
     if (this.state.score > this.state.bestScore) {
       this.state.bestScore = this.state.score;
       this.state.isNewBest = true;
-      saveBestScore(this.state.bestScore);
+
+      if (this.state.mode === 'adventure') {
+        const sectorId = this.state.adventureSectorId;
+        const existing = this.adventureProgress[sectorId];
+        this.adventureProgress[sectorId] = {
+          cleared: existing?.cleared ?? false,
+          stars: existing?.stars ?? 0,
+          bestScore: Math.max(existing?.bestScore ?? 0, this.state.bestScore),
+        };
+        saveAdventureProgress(this.adventureProgress);
+      } else {
+        this.endlessBestScore = this.state.bestScore;
+        saveBestScore(BEST_SCORE_STORAGE_KEY, this.state.bestScore);
+      }
     }
   }
 

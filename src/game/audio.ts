@@ -133,6 +133,9 @@ export class AudioEngine {
       case 'crash':
         this.playCrash(ctx, master);
         break;
+      case 'victory':
+        this.playVictory(ctx, master, event.stars);
+        break;
     }
   }
 
@@ -421,6 +424,71 @@ export class AudioEngine {
 
     subOsc.start(now);
     subOsc.stop(now + 0.37);
+  }
+
+  private playVictory(ctx: AudioContext, destination: AudioNode, stars: number): void {
+    const now = ctx.currentTime;
+    // Ascending C-major-9th extraction arpeggio: C5 -> E5 -> G5 -> D6
+    const notes = [
+      { freq: 523.25, delay: 0.04, duration: 0.42, gain: 0.14, overtoneGain: 0.032 }, // C5
+      { freq: 659.25, delay: 0.115, duration: 0.44, gain: 0.145, overtoneGain: 0.034 }, // E5
+      { freq: 783.99, delay: 0.19, duration: 0.48, gain: 0.15, overtoneGain: 0.036 }, // G5
+      { freq: 1174.66, delay: 0.265, duration: 0.62, gain: 0.165, overtoneGain: 0.038 }, // D6
+    ] as const;
+
+    for (let i = 0; i < notes.length; i++) {
+      const note = notes[i];
+      const startTime = now + note.delay;
+
+      this.triggerTone(ctx, destination, {
+        type: 'sine',
+        freq: note.freq,
+        startTime,
+        attack: 0.009,
+        duration: note.duration,
+        peakGain: note.gain,
+      });
+
+      this.triggerTone(ctx, destination, {
+        type: 'triangle',
+        freq: note.freq * 2,
+        startTime,
+        attack: 0.012,
+        duration: note.duration * 0.58,
+        peakGain: note.overtoneGain,
+      });
+    }
+
+    // Extra bright C6 -> E6 shimmer for a 3-star extraction
+    if (stars >= 3) {
+      const shimmerNotes = [
+        { freq: 1046.5, delay: 0.345, duration: 0.56, gain: 0.11, overtoneGain: 0.025 }, // C6
+        { freq: 1318.51, delay: 0.41, duration: 0.68, gain: 0.12, overtoneGain: 0.028 }, // E6
+      ] as const;
+
+      for (let i = 0; i < shimmerNotes.length; i++) {
+        const note = shimmerNotes[i];
+        const startTime = now + note.delay;
+
+        this.triggerTone(ctx, destination, {
+          type: 'sine',
+          freq: note.freq,
+          startTime,
+          attack: 0.008,
+          duration: note.duration,
+          peakGain: note.gain,
+        });
+
+        this.triggerTone(ctx, destination, {
+          type: 'triangle',
+          freq: note.freq * 2,
+          startTime,
+          attack: 0.01,
+          duration: note.duration * 0.56,
+          peakGain: note.overtoneGain,
+        });
+      }
+    }
   }
 
   private triggerTone(

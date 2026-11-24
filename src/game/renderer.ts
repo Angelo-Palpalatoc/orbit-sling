@@ -160,10 +160,12 @@ export class GameRenderer {
     this.drawStarfield(ctx, vp, state.camera, state.elapsed);
     this.drawTelemetryGrid(ctx, vp, state.camera, state.probe);
 
+    const isVictory = state.status === 'victory';
+    const canShowAim = state.status !== 'victory' && state.status !== 'gameover';
     const activeAnchorId =
       state.probe.mode === 'orbiting' ? state.probe.anchorId : null;
     const lockedAnchorId =
-      state.aim.active && state.aim.valid ? state.aim.lockedAnchorId : null;
+      canShowAim && state.aim.active && state.aim.valid ? state.aim.lockedAnchorId : null;
 
     // Anchors & orbiting hazard drones
     for (let i = 0; i < state.anchors.length; i++) {
@@ -176,7 +178,8 @@ export class GameRenderer {
         vp,
         state.elapsed,
         anchor.id === activeAnchorId,
-        anchor.id === lockedAnchorId
+        anchor.id === lockedAnchorId,
+        isVictory
       );
     }
 
@@ -193,7 +196,7 @@ export class GameRenderer {
     }
 
     // Trajectory preview (world-space)
-    if (state.aim.active && state.aim.valid && state.aim.trajectory.length > 0) {
+    if (canShowAim && state.aim.active && state.aim.valid && state.aim.trajectory.length > 0) {
       this.drawTrajectoryPreview(ctx, state, vp);
     }
 
@@ -210,7 +213,7 @@ export class GameRenderer {
     this.drawFloatingTexts(ctx, state.floatingTexts, state.camera, vp);
 
     // Screen-space slingshot pull indicator
-    if (state.aim.active) {
+    if (canShowAim && state.aim.active) {
       this.drawAimIndicator(ctx, state);
     }
   }
@@ -411,15 +414,58 @@ export class GameRenderer {
     vp: ViewportMetrics
   ): boolean {
     const pos = worldToScreen(anchor.x, anchor.y, camera, vp);
+    const goalAuraPad = anchor.isGoal ? anchor.captureRadius * 1.65 : 0;
     const margin =
-      Math.max(anchor.gravityRange, anchor.captureRadius + anchor.driftAmplitude + 40) *
-      vp.viewScale;
+      Math.max(
+        anchor.gravityRange,
+        anchor.captureRadius + anchor.driftAmplitude + 40,
+        goalAuraPad
+      ) * vp.viewScale;
     return (
       pos.x >= -margin &&
       pos.x <= vp.width + margin &&
       pos.y >= -margin &&
       pos.y <= vp.height + margin
     );
+  }
+
+  private drawTrackedText(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    centerX: number,
+    centerY: number,
+    tracking: number,
+    fillStyle: string,
+    strokeStyle: string,
+    strokeWidth: number
+  ): void {
+    const len = text.length;
+    if (len === 0) return;
+
+    const charWidths: number[] = new Array(len);
+    let totalWidth = 0;
+    for (let i = 0; i < len; i++) {
+      const w = ctx.measureText(text[i]).width;
+      charWidths[i] = w;
+      totalWidth += w;
+    }
+    totalWidth += tracking * (len - 1);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = strokeWidth;
+    ctx.strokeStyle = strokeStyle;
+    ctx.fillStyle = fillStyle;
+
+    let cursorX = centerX - totalWidth * 0.5;
+    for (let i = 0; i < len; i++) {
+      const ch = text[i];
+      const cx = cursorX + charWidths[i] * 0.5;
+      ctx.strokeText(ch, cx, centerY);
+      ctx.fillText(ch, cx, centerY);
+      cursorX += charWidths[i] + tracking;
+    }
   }
 
   private drawAnchor(
@@ -429,14 +475,18 @@ export class GameRenderer {
     vp: ViewportMetrics,
     elapsed: number,
     isCurrent: boolean,
-    isLocked: boolean
+    isLocked: boolean,
+    isVictory: boolean
   ): void {
     const scale = vp.viewScale;
     const pos = worldToScreen(anchor.x, anchor.y, camera, vp);
     const captureR = anchor.captureRadius * scale;
     const orbitR = anchor.orbitRadius * scale;
     const coreR = Math.max(5.5, anchor.coreRadius * scale);
-    const auraR = Math.max(captureR * 1.38, anchor.gravityRange * 0.72 * scale);
+    const isGoal = anchor.isGoal;
+    const auraR = isGoal
+      ? Math.max(captureR * 1.56, anchor.gravityRange * 0.8 * scale)
+      : Math.max(captureR * 1.38, anchor.gravityRange * 0.72 * scale);
 
     ctx.save();
 
@@ -474,19 +524,33 @@ export class GameRenderer {
       ctx.stroke();
     }
 
-    // 2. Faint gravity well aura
-    const auraAlpha = isLocked ? 0.135 : isCurrent ? 0.095 : 0.065;
+    // 2. Faint gravity well aura (or warm gold Extraction Beacon aura)
     const auraGrad = ctx.createRadialGradient(pos.x, pos.y, coreR * 0.6, pos.x, pos.y, auraR);
-    if (anchor.hasDecay && anchor.decayActive && anchor.decayDuration > 0) {
-      const frac = clamp(anchor.decayRemaining / anchor.decayDuration, 0, 1);
-      const c = decayColor(frac);
-      auraGrad.addColorStop(0, `rgba(${c.r}, ${c.g}, ${c.b}, ${(auraAlpha * 1.4).toFixed(3)})`);
-      auraGrad.addColorStop(0.52, `rgba(${c.r}, ${c.g}, ${c.b}, ${(auraAlpha * 0.45).toFixed(3)})`);
-      auraGrad.addColorStop(1, `rgba(${c.r}, ${c.g}, ${c.b}, 0)`);
+    if (isGoal) {
+      const beaconPulse = 0.5 + 0.5 * Math.sin(elapsed * 2.4);
+      const goalAuraAlpha = isVictory
+        ? 0.24 + beaconPulse * 0.05
+        : isLocked
+          ? 0.21 + beaconPulse * 0.03
+          : isCurrent
+            ? 0.18 + beaconPulse * 0.03
+            : 0.14 + beaconPulse * 0.025;
+      auraGrad.addColorStop(0, `rgba(245, 184, 65, ${goalAuraAlpha.toFixed(3)})`);
+      auraGrad.addColorStop(0.52, `rgba(245, 184, 65, ${(goalAuraAlpha * 0.42).toFixed(3)})`);
+      auraGrad.addColorStop(1, 'rgba(245, 184, 65, 0)');
     } else {
-      auraGrad.addColorStop(0, `rgba(56, 189, 248, ${(auraAlpha * 1.25).toFixed(3)})`);
-      auraGrad.addColorStop(0.55, `rgba(56, 189, 248, ${(auraAlpha * 0.42).toFixed(3)})`);
-      auraGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      const auraAlpha = isLocked ? 0.135 : isCurrent ? 0.095 : 0.065;
+      if (anchor.hasDecay && anchor.decayActive && anchor.decayDuration > 0) {
+        const frac = clamp(anchor.decayRemaining / anchor.decayDuration, 0, 1);
+        const c = decayColor(frac);
+        auraGrad.addColorStop(0, `rgba(${c.r}, ${c.g}, ${c.b}, ${(auraAlpha * 1.4).toFixed(3)})`);
+        auraGrad.addColorStop(0.52, `rgba(${c.r}, ${c.g}, ${c.b}, ${(auraAlpha * 0.45).toFixed(3)})`);
+        auraGrad.addColorStop(1, `rgba(${c.r}, ${c.g}, ${c.b}, 0)`);
+      } else {
+        auraGrad.addColorStop(0, `rgba(56, 189, 248, ${(auraAlpha * 1.25).toFixed(3)})`);
+        auraGrad.addColorStop(0.55, `rgba(56, 189, 248, ${(auraAlpha * 0.42).toFixed(3)})`);
+        auraGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      }
     }
     ctx.fillStyle = auraGrad;
     ctx.beginPath();
@@ -498,42 +562,94 @@ export class GameRenderer {
       const pulse = clamp(anchor.capturePulse, 0, 1);
       const expandProgress = 1 - pulse;
       const pulseR = lerp(orbitR, captureR * 1.32, 1 - Math.pow(1 - expandProgress, 2));
-      ctx.strokeStyle = `rgba(125, 211, 252, ${(pulse * 0.72).toFixed(3)})`;
+      ctx.strokeStyle = isGoal
+        ? `rgba(252, 211, 77, ${(pulse * 0.82).toFixed(3)})`
+        : `rgba(125, 211, 252, ${(pulse * 0.72).toFixed(3)})`;
       ctx.lineWidth = 1.2 + pulse * 1.8;
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, pulseR, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    // 4. Dashed/segmented capture ring
-    const ringRot = elapsed * 0.14 * (anchor.index % 2 === 0 ? 1 : -1);
-    ctx.save();
-    ctx.translate(pos.x, pos.y);
-    ctx.rotate(ringRot);
-    ctx.strokeStyle = isLocked
-      ? 'rgba(56, 189, 248, 0.88)'
-      : isCurrent
-        ? 'rgba(56, 189, 248, 0.42)'
-        : anchor.visited
-          ? 'rgba(148, 163, 184, 0.22)'
-          : 'rgba(56, 189, 248, 0.32)';
-    ctx.lineWidth = isLocked ? 1.8 : 1.15;
-    const dashLen = Math.max(5, captureR * 0.16);
-    const gapLen = Math.max(4, captureR * 0.11);
-    ctx.setLineDash([dashLen, gapLen]);
-    ctx.beginPath();
-    ctx.arc(0, 0, captureR, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
+    // 4. Dashed/segmented capture ring (+ counter-rotating inner cyan arc for Extraction Goal)
+    if (isGoal) {
+      // Outer dashed warm gold capture ring rotating gently clockwise
+      const outerRot = elapsed * 0.18;
+      ctx.save();
+      ctx.translate(pos.x, pos.y);
+      ctx.rotate(outerRot);
+      ctx.strokeStyle =
+        isLocked || isVictory
+          ? 'rgba(252, 211, 77, 0.96)'
+          : isCurrent
+            ? 'rgba(245, 184, 65, 0.88)'
+            : 'rgba(245, 184, 65, 0.8)';
+      ctx.lineWidth = isLocked || isVictory ? 2.1 : 1.55;
+      const dashLen = Math.max(6, captureR * 0.18);
+      const gapLen = Math.max(4.5, captureR * 0.11);
+      ctx.setLineDash([dashLen, gapLen]);
+      ctx.beginPath();
+      ctx.arc(0, 0, captureR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Secondary inner segmented cyan telemetry arc rotating slowly counter-clockwise
+      const innerArcR = Math.max(
+        orbitR + Math.max(3.5, 4.5 * scale),
+        captureR - Math.max(6.5, 8 * scale)
+      );
+      if (innerArcR > orbitR + 2 && innerArcR < captureR - 2) {
+        const innerRot = -elapsed * 0.12;
+        const segmentCount = 4;
+        const segmentSpan = Math.PI * 0.34;
+        const segmentStep = (Math.PI * 2) / segmentCount;
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(innerRot);
+        ctx.strokeStyle =
+          isLocked || isVictory
+            ? 'rgba(56, 189, 248, 0.56)'
+            : 'rgba(56, 189, 248, 0.42)';
+        ctx.lineWidth = 1.2;
+        for (let s = 0; s < segmentCount; s++) {
+          const startA = s * segmentStep;
+          ctx.beginPath();
+          ctx.arc(0, 0, innerArcR, startA, startA + segmentSpan);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    } else {
+      const ringRot = elapsed * 0.14 * (anchor.index % 2 === 0 ? 1 : -1);
+      ctx.save();
+      ctx.translate(pos.x, pos.y);
+      ctx.rotate(ringRot);
+      ctx.strokeStyle = isLocked
+        ? 'rgba(56, 189, 248, 0.88)'
+        : isCurrent
+          ? 'rgba(56, 189, 248, 0.42)'
+          : anchor.visited
+            ? 'rgba(148, 163, 184, 0.22)'
+            : 'rgba(56, 189, 248, 0.32)';
+      ctx.lineWidth = isLocked ? 1.8 : 1.15;
+      const dashLen = Math.max(5, captureR * 0.16);
+      const gapLen = Math.max(4, captureR * 0.11);
+      ctx.setLineDash([dashLen, gapLen]);
+      ctx.beginPath();
+      ctx.arc(0, 0, captureR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
 
     // 5. Lock-on corner brackets / ticks around capture ring
     if (isLocked) {
       const breathe = Math.sin(elapsed * 9) * 2.2;
       const bracketR = captureR + 6 + breathe;
       const arcSpan = 0.22;
-      ctx.strokeStyle = PALETTE.cyanSoft;
-      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = isGoal ? PALETTE.goldSoft : PALETTE.cyanSoft;
+      ctx.lineWidth = isGoal ? 2.0 : 1.8;
       ctx.lineCap = 'round';
 
       for (let q = 0; q < 4; q++) {
@@ -554,12 +670,21 @@ export class GameRenderer {
     }
 
     // 6. Subtle orbit track circle
-    ctx.strokeStyle = isCurrent
-      ? 'rgba(125, 211, 252, 0.36)'
-      : isLocked
-        ? 'rgba(56, 189, 248, 0.38)'
-        : 'rgba(148, 163, 184, 0.18)';
-    ctx.lineWidth = isCurrent ? 1.35 : 1;
+    if (isGoal) {
+      ctx.strokeStyle = isVictory
+        ? 'rgba(252, 211, 77, 0.62)'
+        : isCurrent || isLocked
+          ? 'rgba(245, 184, 65, 0.54)'
+          : 'rgba(245, 184, 65, 0.34)';
+      ctx.lineWidth = isVictory || isCurrent ? 1.45 : 1.1;
+    } else {
+      ctx.strokeStyle = isCurrent
+        ? 'rgba(125, 211, 252, 0.36)'
+        : isLocked
+          ? 'rgba(56, 189, 248, 0.38)'
+          : 'rgba(148, 163, 184, 0.18)';
+      ctx.lineWidth = isCurrent ? 1.35 : 1;
+    }
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, orbitR, 0, Math.PI * 2);
     ctx.stroke();
@@ -675,48 +800,114 @@ export class GameRenderer {
       }
     }
 
-    // 9. Anchor Core Disc
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, coreR, 0, Math.PI * 2);
-    ctx.fillStyle = '#131D30';
-    ctx.fill();
-
-    const coreStroke = isLocked
-      ? PALETTE.cyanSoft
-      : isCurrent
-        ? PALETTE.cyan
-        : anchor.visited
-          ? PALETTE.slateMuted
-          : PALETTE.slateLight;
-    ctx.strokeStyle = coreStroke;
-    ctx.lineWidth = isLocked || isCurrent ? 1.8 : 1.35;
-    ctx.stroke();
-
-    // Subtle concentric inner ring
-    if (coreR >= 8) {
-      ctx.strokeStyle = isCurrent || isLocked
-        ? 'rgba(56, 189, 248, 0.28)'
-        : 'rgba(148, 163, 184, 0.16)';
-      ctx.lineWidth = 0.85;
+    // 9. Anchor Core Disc (Extraction Goal emblem + EXTRACT badge vs standard numeric core)
+    if (isGoal) {
       ctx.beginPath();
-      ctx.arc(pos.x, pos.y, coreR * 0.72, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    // Tiny telemetry index label or pinpoint core dot
-    if (coreR >= 10.5) {
-      const label = String(anchor.index).padStart(2, '0');
-      const fontSize = Math.max(8, Math.round(coreR * 0.62));
-      ctx.font = `600 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = isCurrent || isLocked ? PALETTE.white : PALETTE.slate;
-      ctx.fillText(label, pos.x, pos.y + 0.5);
-    } else {
-      ctx.fillStyle = isCurrent || isLocked ? PALETTE.cyan : PALETTE.slateLight;
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, Math.max(2, coreR * 0.24), 0, Math.PI * 2);
+      ctx.arc(pos.x, pos.y, coreR, 0, Math.PI * 2);
+      ctx.fillStyle = '#0E1626';
       ctx.fill();
+
+      ctx.strokeStyle = isLocked || isVictory ? PALETTE.goldSoft : PALETTE.gold;
+      ctx.lineWidth = isLocked || isVictory || isCurrent ? 2.1 : 1.75;
+      ctx.stroke();
+
+      // Subtle concentric gold inner ring
+      if (coreR >= 8) {
+        ctx.strokeStyle =
+          isLocked || isVictory
+            ? 'rgba(252, 211, 77, 0.45)'
+            : 'rgba(245, 184, 65, 0.3)';
+        ctx.lineWidth = 0.85;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, coreR * 0.74, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Inset rotated gold/white diamond emblem
+      const dOuter = Math.max(3.6, coreR * 0.48);
+      ctx.beginPath();
+      ctx.moveTo(pos.x, pos.y - dOuter);
+      ctx.lineTo(pos.x + dOuter, pos.y);
+      ctx.lineTo(pos.x, pos.y + dOuter);
+      ctx.lineTo(pos.x - dOuter, pos.y);
+      ctx.closePath();
+      ctx.fillStyle = PALETTE.gold;
+      ctx.fill();
+      ctx.strokeStyle = PALETTE.goldSoft;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+
+      const dInner = Math.max(1.8, coreR * 0.23);
+      ctx.beginPath();
+      ctx.moveTo(pos.x, pos.y - dInner);
+      ctx.lineTo(pos.x + dInner, pos.y);
+      ctx.lineTo(pos.x, pos.y + dInner);
+      ctx.lineTo(pos.x - dInner, pos.y);
+      ctx.closePath();
+      ctx.fillStyle = PALETTE.white;
+      ctx.fill();
+
+      // Tracked monospace EXTRACT telemetry badge centered cleanly below the core
+      const fontSize = Math.max(8, Math.round(9.5 * scale));
+      const orbitClearance = orbitR - coreR;
+      const labelOffsetY =
+        orbitClearance >= fontSize + 8
+          ? coreR + Math.min(13.5 * scale, orbitClearance * 0.48)
+          : coreR + Math.max(9.5, fontSize * 1.15);
+      ctx.font = `700 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
+      this.drawTrackedText(
+        ctx,
+        'EXTRACT',
+        pos.x,
+        pos.y + labelOffsetY,
+        Math.max(1.2, fontSize * 0.2),
+        PALETTE.goldSoft,
+        'rgba(7, 11, 19, 0.88)',
+        2.8
+      );
+    } else {
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, coreR, 0, Math.PI * 2);
+      ctx.fillStyle = '#131D30';
+      ctx.fill();
+
+      const coreStroke = isLocked
+        ? PALETTE.cyanSoft
+        : isCurrent
+          ? PALETTE.cyan
+          : anchor.visited
+            ? PALETTE.slateMuted
+            : PALETTE.slateLight;
+      ctx.strokeStyle = coreStroke;
+      ctx.lineWidth = isLocked || isCurrent ? 1.8 : 1.35;
+      ctx.stroke();
+
+      // Subtle concentric inner ring
+      if (coreR >= 8) {
+        ctx.strokeStyle = isCurrent || isLocked
+          ? 'rgba(56, 189, 248, 0.28)'
+          : 'rgba(148, 163, 184, 0.16)';
+        ctx.lineWidth = 0.85;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, coreR * 0.72, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Tiny telemetry index label or pinpoint core dot
+      if (coreR >= 9.5) {
+        const label = String(anchor.index).padStart(2, '0');
+        const fontSize = Math.max(8, Math.round(coreR * 0.62));
+        ctx.font = `600 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = isCurrent || isLocked ? PALETTE.white : PALETTE.slate;
+        ctx.fillText(label, pos.x, pos.y + 0.5);
+      } else {
+        ctx.fillStyle = isCurrent || isLocked ? PALETTE.cyan : PALETTE.slateLight;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, Math.max(2, coreR * 0.24), 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     ctx.restore();
@@ -843,8 +1034,11 @@ export class GameRenderer {
       ctx.lineTo(lastX - arm, lastY + arm);
       ctx.stroke();
     } else if (lockedAnchorId !== null) {
+      const lockedIsGoal = state.anchors.some(
+        (anchor) => anchor.id === lockedAnchorId && anchor.isGoal
+      );
       const reticleR = 7;
-      ctx.strokeStyle = PALETTE.cyanSoft;
+      ctx.strokeStyle = lockedIsGoal ? PALETTE.goldSoft : PALETTE.cyanSoft;
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(lastX, lastY, reticleR, 0, Math.PI * 2);

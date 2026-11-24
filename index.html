@@ -20,7 +20,7 @@
             <span id="hud-score" class="stat-value">0</span>
           </div>
           <div class="stat-block stat-block--muted">
-            <span class="stat-label">BEST</span>
+            <span id="hud-best-label" class="stat-label">BEST</span>
             <span id="hud-best" class="stat-value">0</span>
           </div>
         </div>
@@ -70,8 +70,28 @@
       <!-- Non-blocking Title / First-Run Hint -->
       <div id="start-overlay" class="start-overlay" aria-hidden="false">
         <div class="title-lockup">
-          <div class="title-kicker">ORBITAL TELEMETRY // 01</div>
+          <div id="start-kicker" class="title-kicker">ORBITAL TELEMETRY // ENDLESS</div>
           <h1 class="title-heading">ORBIT SLING</h1>
+          <div class="mode-toggle" role="group" aria-label="Game mode">
+            <button id="btn-mode-endless" class="mode-btn is-active" type="button" aria-pressed="true">
+              Endless
+            </button>
+            <button id="btn-mode-adventure" class="mode-btn mode-btn--adventure" type="button" aria-pressed="false">
+              Adventure
+            </button>
+          </div>
+
+          <!-- Compact Adventure Sector Selector -->
+          <div id="adventure-panel" class="adventure-panel" hidden>
+            <div class="adventure-header">
+              <span id="adventure-sector-title" class="adventure-sector-title">SECTOR 01 · CALIBRATION</span>
+              <span id="adventure-stars-total" class="adventure-stars-total" aria-label="Total adventure stars">★ 0/30</span>
+            </div>
+            <div id="adventure-sector-subtitle" class="adventure-sector-subtitle">
+              Stable orbits · Learn the slingshot arc
+            </div>
+            <div id="adventure-sector-grid" class="adventure-sector-grid" role="group" aria-label="Adventure sectors"></div>
+          </div>
         </div>
         <div class="start-hint">
           <span class="hint-dot"></span>
@@ -79,11 +99,100 @@
         </div>
       </div>
 
+      <!-- Sector Clear (Victory) Overlay -->
+      <section id="victory-overlay" class="gameover-overlay victory-overlay" role="dialog" aria-modal="true" aria-labelledby="victory-title" hidden>
+        <div class="gameover-card victory-card">
+          <div class="victory-tag">EXTRACTION COMPLETE</div>
+          <h2 id="victory-title" class="gameover-title">SECTOR 01 CLEARED</h2>
+          <div id="victory-subtitle" class="gameover-mode is-adventure">CALIBRATION</div>
+
+          <div id="victory-stars" class="victory-stars" role="img" aria-label="0 of 3 stars earned">
+            <svg id="victory-star-1" class="victory-star" style="--star-delay: 80ms" viewBox="0 0 24 24" aria-hidden="true">
+              <polygon points="12 2.4 14.95 8.38 21.55 9.34 16.78 13.99 17.9 20.56 12 17.46 6.1 20.56 7.22 13.99 2.45 9.34 9.05 8.38 12 2.4" />
+            </svg>
+            <svg id="victory-star-2" class="victory-star" style="--star-delay: 200ms" viewBox="0 0 24 24" aria-hidden="true">
+              <polygon points="12 2.4 14.95 8.38 21.55 9.34 16.78 13.99 17.9 20.56 12 17.46 6.1 20.56 7.22 13.99 2.45 9.34 9.05 8.38 12 2.4" />
+            </svg>
+            <svg id="victory-star-3" class="victory-star" style="--star-delay: 320ms" viewBox="0 0 24 24" aria-hidden="true">
+              <polygon points="12 2.4 14.95 8.38 21.55 9.34 16.78 13.99 17.9 20.56 12 17.46 6.1 20.56 7.22 13.99 2.45 9.34 9.05 8.38 12 2.4" />
+            </svg>
+          </div>
+
+          <ul class="victory-objectives" aria-label="Sector star objectives">
+            <li id="obj-cleared" class="victory-objective is-complete">
+              <span class="objective-check" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3.2 8.4 6.6 11.6 12.8 4.6" />
+                </svg>
+              </span>
+              <span class="objective-name">Extraction Reached</span>
+              <span class="objective-meta">CLEAR</span>
+            </li>
+            <li id="obj-shards" class="victory-objective">
+              <span class="objective-check" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3.2 8.4 6.6 11.6 12.8 4.6" />
+                </svg>
+              </span>
+              <span class="objective-name">Shards Collected</span>
+              <span id="obj-shards-val" class="objective-meta">0/0</span>
+            </li>
+            <li id="obj-combo" class="victory-objective">
+              <span class="objective-check" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3.2 8.4 6.6 11.6 12.8 4.6" />
+                </svg>
+              </span>
+              <span class="objective-name">Max Combo</span>
+              <span id="obj-combo-val" class="objective-meta">x1 / x3</span>
+            </li>
+          </ul>
+
+          <div class="victory-score-bar">
+            <span class="victory-score-item">SCORE <strong id="victory-score">0</strong></span>
+            <span class="victory-score-sep" aria-hidden="true">·</span>
+            <span class="victory-score-item">BEST <strong id="victory-best">0</strong></span>
+            <span id="victory-new-best" class="new-badge" hidden>NEW</span>
+          </div>
+
+          <div class="victory-actions">
+            <button id="btn-victory-next" class="primary-btn primary-btn--gold" type="button">
+              <span id="btn-victory-next-label">Next Sector</span>
+              <span id="btn-victory-next-key" class="key-hint">↵</span>
+            </button>
+            <div class="victory-secondary-actions">
+              <button id="btn-victory-replay" class="secondary-btn" type="button">
+                <span>Replay</span>
+                <span class="key-hint key-hint--subtle">R</span>
+              </button>
+              <button id="btn-victory-share" class="secondary-btn" type="button" title="Copy or share sector result" aria-label="Share sector result">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="18" cy="5" r="3" />
+                  <circle cx="6" cy="12" r="3" />
+                  <circle cx="18" cy="19" r="3" />
+                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                </svg>
+                <span id="btn-victory-share-label">Share</span>
+              </button>
+            </div>
+          </div>
+
+          <footer class="gameover-footer">
+            <span>Built by</span>
+            <a href="https://angelo-palpalatoc.vercel.app/" target="_blank" rel="noopener noreferrer">Angelo Palpalatoc</a>
+            <span class="footer-sep" aria-hidden="true">·</span>
+            <a href="https://github.com/Angelo-Palpalatoc" target="_blank" rel="noopener noreferrer">GitHub</a>
+          </footer>
+        </div>
+      </section>
+
       <!-- Game Over Overlay -->
       <section id="gameover-overlay" class="gameover-overlay" role="dialog" aria-modal="true" aria-labelledby="gameover-title" hidden>
         <div class="gameover-card">
           <div id="gameover-reason" class="gameover-reason">SIGNAL LOST</div>
           <h2 id="gameover-title" class="gameover-title">RUN TERMINATED</h2>
+          <div id="gameover-mode" class="gameover-mode">ENDLESS SECTOR</div>
 
           <div class="gameover-stats">
             <div class="go-stat">
@@ -91,7 +200,7 @@
               <span id="go-score" class="go-stat-value">0</span>
             </div>
             <div class="go-stat">
-              <span class="go-stat-label">BEST <span id="go-new-best" class="new-badge" hidden>NEW</span></span>
+              <span class="go-stat-label"><span id="go-best-label">BEST</span> <span id="go-new-best" class="new-badge" hidden>NEW</span></span>
               <span id="go-best" class="go-stat-value go-stat-value--gold">0</span>
             </div>
             <div class="go-stat">
@@ -100,10 +209,22 @@
             </div>
           </div>
 
-          <button id="btn-play-again" class="primary-btn" type="button">
-            Play Again
-            <span class="key-hint">R</span>
-          </button>
+          <div class="gameover-actions">
+            <button id="btn-play-again" class="primary-btn" type="button">
+              <span id="btn-play-again-label">Play Again</span>
+              <span class="key-hint">R</span>
+            </button>
+            <button id="btn-share" class="secondary-btn" type="button" title="Copy or share run summary" aria-label="Share result">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="18" cy="5" r="3" />
+                <circle cx="6" cy="12" r="3" />
+                <circle cx="18" cy="19" r="3" />
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+              </svg>
+              <span id="btn-share-label">Share</span>
+            </button>
+          </div>
 
           <footer class="gameover-footer">
             <span>Built by</span>
@@ -118,4 +239,3 @@
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
-

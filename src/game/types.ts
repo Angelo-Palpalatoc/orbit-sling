@@ -3,7 +3,9 @@ export interface Vec2 {
   y: number;
 }
 
-export type GameStatus = 'ready' | 'playing' | 'gameover';
+export type GameStatus = 'ready' | 'playing' | 'gameover' | 'victory';
+
+export type GameMode = 'endless' | 'adventure';
 
 export type ProbeMode = 'orbiting' | 'flying' | 'crashed';
 
@@ -45,6 +47,8 @@ export interface Anchor {
   decayRemaining: number; // remaining seconds
   decayActive: boolean;
   visited: boolean;
+  /** True for the final Extraction Goal anchor in Adventure sectors */
+  isGoal: boolean;
   /** Visual capture pulse timer (0..1, decays to 0) */
   capturePulse: number;
   drones: HazardDrone[];
@@ -164,12 +168,56 @@ export interface Star {
   tint: string;
 }
 
+export interface SectorDefinition {
+  id: number;
+  code: string;
+  name: string;
+  subtitle: string;
+  seed: string;
+  anchorCount: number;
+  captureRadiusScale: number;
+  gravityMultiplier: number;
+  /** Seconds before collapse, or 0 for no decay */
+  decayDuration: number;
+  driftChance: number;
+  driftSpeedScale: number;
+  droneChance: number;
+  dualDroneChance: number;
+  droneSpeedScale: number;
+  /** Fraction of total sector shards required for the Shard star (0..1) */
+  shardStarRatio: number;
+  minComboForStar: number;
+}
+
+export interface SectorProgress {
+  cleared: boolean;
+  stars: number; // 0..3
+  bestScore: number;
+}
+
+export interface AdventureRunSummary {
+  sectorId: number;
+  sectorCode: string;
+  sectorName: string;
+  starsEarned: number;
+  starCleared: boolean;
+  starShards: boolean;
+  starCombo: boolean;
+  shardsCollected: number;
+  totalShards: number;
+  shardTarget: number;
+  maxCombo: number;
+  comboTarget: number;
+  hasNextSector: boolean;
+}
+
 export type GameEvent =
   | { type: 'launch'; power: number }
   | { type: 'capture'; combo: number; points: number; skipped: number; isNewAnchor: boolean }
   | { type: 'shard'; combo: number; points: number }
   | { type: 'decayWarning'; urgency: number }
-  | { type: 'crash'; reason: GameOverReason };
+  | { type: 'crash'; reason: GameOverReason }
+  | { type: 'victory'; sectorId: number; stars: number };
 
 export interface ViewportMetrics {
   width: number; // CSS pixels
@@ -181,12 +229,19 @@ export interface ViewportMetrics {
 
 export interface GameState {
   status: GameStatus;
+  mode: GameMode;
   score: number;
   bestScore: number;
   isNewBest: boolean;
   combo: number;
   maxCombo: number;
   anchorsCaptured: number;
+  shardsCollected: number;
+  adventureSectorId: number;
+  adventureTotalAnchors: number;
+  adventureCurrentAnchorIndex: number;
+  adventureTotalShards: number;
+  adventureSummary: AdventureRunSummary | null;
   gameOverReason: GameOverReason | null;
   gameOverElapsed: number;
   elapsed: number;
