@@ -12,7 +12,29 @@ export type ProbeMode = 'orbiting' | 'flying' | 'crashed';
 export type GameOverReason =
   | 'OUT_OF_SECTOR'
   | 'ORBIT_DECAYED'
-  | 'DRONE_COLLISION';
+  | 'DRONE_COLLISION'
+  | 'REPULSOR_IMPACT';
+
+export interface ShieldArc {
+  /** Center angle of the deflecting coral shield arc (radians) */
+  angle: number;
+  /** Signed rotation speed (rad/s) */
+  angularSpeed: number;
+  /** Angular width of the shield arc (radians, always < PI so an open entry gap exists) */
+  arcSpan: number;
+}
+
+export interface RepulsorNode {
+  id: number;
+  x: number;
+  y: number;
+  coreRadius: number;
+  /** Repulsive anti-gravity strength in world units^3 / s^2 */
+  strength: number;
+  /** Effective outer radius of the repulsive field */
+  range: number;
+  pulsePhase: number;
+}
 
 export interface HazardDrone {
   id: number;
@@ -49,8 +71,14 @@ export interface Anchor {
   visited: boolean;
   /** True for the final Extraction Goal anchor in Adventure sectors */
   isGoal: boolean;
+  /** Launch speed multiplier when slinging from this anchor (1.0 normal, >1.0 Boost/Overdrive) */
+  boostMultiplier: number;
+  /** Optional rotating coral deflector shield around the capture ring */
+  shield: ShieldArc | null;
   /** Visual capture pulse timer (0..1, decays to 0) */
   capturePulse: number;
+  /** Visual shield deflection flash timer (0..1, decays to 0) */
+  deflectPulse: number;
   drones: HazardDrone[];
 }
 
@@ -143,8 +171,10 @@ export interface AimState {
   trajectory: TrajectoryPoint[];
   /** Anchor ID intersected by the predicted trajectory, if any */
   lockedAnchorId: number | null;
-  /** True if predicted trajectory hits a hazard drone */
+  /** True if predicted trajectory hits a hazard drone or repulsor core */
   hitsHazard: boolean;
+  /** True if predicted trajectory bounces off a rotating shield arc */
+  deflectsOffShield: boolean;
 }
 
 export interface CameraState {
@@ -168,8 +198,19 @@ export interface Star {
   tint: string;
 }
 
+export interface ChapterDefinition {
+  id: number; // 1..5
+  code: string; // '01'..'05'
+  name: string;
+  tagline: string;
+  accent: 'cyan' | 'coral' | 'gold';
+  startSectorId: number;
+  endSectorId: number;
+}
+
 export interface SectorDefinition {
   id: number;
+  chapterId: number;
   code: string;
   name: string;
   subtitle: string;
@@ -184,6 +225,15 @@ export interface SectorDefinition {
   droneChance: number;
   dualDroneChance: number;
   droneSpeedScale: number;
+  /** Probability of spawning a flanking Repulsor (-G) node between anchors */
+  repulsorChance: number;
+  repulsorStrengthScale: number;
+  /** Probability of equipping an intermediate anchor with a rotating Shield Arc */
+  shieldChance: number;
+  shieldSpeedScale: number;
+  /** Probability of making an intermediate anchor an Overdrive Boost anchor (with wider next gap) */
+  boostChance: number;
+  boostMultiplier: number;
   /** Fraction of total sector shards required for the Shard star (0..1) */
   shardStarRatio: number;
   minComboForStar: number;
@@ -212,8 +262,9 @@ export interface AdventureRunSummary {
 }
 
 export type GameEvent =
-  | { type: 'launch'; power: number }
+  | { type: 'launch'; power: number; boosted?: boolean }
   | { type: 'capture'; combo: number; points: number; skipped: number; isNewAnchor: boolean }
+  | { type: 'deflect' }
   | { type: 'shard'; combo: number; points: number }
   | { type: 'decayWarning'; urgency: number }
   | { type: 'crash'; reason: GameOverReason }
@@ -248,6 +299,7 @@ export interface GameState {
   hitStopRemaining: number;
   probe: Probe;
   anchors: Anchor[];
+  repulsors: RepulsorNode[];
   shards: EnergyShard[];
   particles: Particle[];
   shockwaves: Shockwave[];

@@ -1,7 +1,16 @@
 import './style.css';
 import { AudioEngine } from './game/audio';
 import { GameEngine } from './game/engine';
-import { ADVENTURE_SECTORS, getSectorById, getTotalAdventureStars } from './game/levels';
+import {
+  ADVENTURE_CHAPTERS,
+  ADVENTURE_SECTORS,
+  getChapterById,
+  getChapterStarCounts,
+  getSectorById,
+  getSectorsByChapter,
+  getTotalAdventureStars,
+  getTotalMaxAdventureStars,
+} from './game/levels';
 import { GameRenderer } from './game/renderer';
 import type { GameMode, GameOverReason, GameState, GameStatus } from './game/types';
 
@@ -9,9 +18,11 @@ const GAME_OVER_COPY: Record<GameOverReason, string> = {
   OUT_OF_SECTOR: 'DRIFTED OUT OF SECTOR',
   ORBIT_DECAYED: 'ANCHOR ORBIT DECAYED',
   DRONE_COLLISION: 'HAZARD DRONE IMPACT',
+  REPULSOR_IMPACT: 'REPULSOR CORE IMPACT',
 };
 
-const MAX_ADVENTURE_STARS = ADVENTURE_SECTORS.length * 3;
+const MAX_ADVENTURE_STARS = getTotalMaxAdventureStars();
+const SECTORS_PER_PAGE = 10;
 
 interface InitialRoute {
   mode: GameMode;
@@ -73,20 +84,21 @@ function buildShareUrl(mode: GameMode, sectorId: number): string {
 function buildShareText(state: GameState): string {
   if (state.mode === 'adventure') {
     const sector = getSectorById(state.adventureSectorId);
+    const chapter = getChapterById(sector.chapterId);
     const shareUrl = buildShareUrl('adventure', sector.id);
 
     if (state.status === 'victory' && state.adventureSummary) {
       const summary = state.adventureSummary;
       const earned = Math.max(0, Math.min(3, summary.starsEarned));
       const starsStr = `${'★'.repeat(earned)}${'☆'.repeat(3 - earned)}`;
-      const header = `ORBIT SLING · SECTOR ${summary.sectorCode} ${summary.sectorName}`;
+      const header = `ORBIT SLING · CH ${chapter.code} · SECTOR ${summary.sectorCode} ${summary.sectorName}`;
       const stats = `${starsStr} · Score ${state.score} · Max x${Math.max(1, summary.maxCombo)} · ${summary.shardsCollected}/${summary.totalShards} shards`;
       return shareUrl ? `${header}\n${stats}\n${shareUrl}` : `${header}\n${stats}`;
     }
 
     const current = Math.max(0, state.adventureCurrentAnchorIndex);
     const total = Math.max(1, state.adventureTotalAnchors);
-    const header = `ORBIT SLING · SECTOR ${sector.code} ${sector.name}`;
+    const header = `ORBIT SLING · CH ${chapter.code} · SECTOR ${sector.code} ${sector.name}`;
     const stats = `Reached ${current}/${total} · Score ${state.score} · Max x${Math.max(1, state.maxCombo)}`;
     return shareUrl ? `${header}\n${stats}\n${shareUrl}` : `${header}\n${stats}`;
   }
@@ -136,8 +148,9 @@ function requireElement<T extends Element>(id: string): T {
 }
 
 interface SectorPillRef {
-  id: number;
+  sectorId: number;
   button: HTMLButtonElement;
+  codeEl: HTMLElement;
   dots: HTMLElement[];
 }
 
@@ -173,6 +186,10 @@ function bootstrap(): void {
   const btnModeEndless = requireElement<HTMLButtonElement>('btn-mode-endless');
   const btnModeAdventure = requireElement<HTMLButtonElement>('btn-mode-adventure');
   const adventurePanel = requireElement<HTMLElement>('adventure-panel');
+  const btnChapterPrev = requireElement<HTMLButtonElement>('btn-chapter-prev');
+  const btnChapterNext = requireElement<HTMLButtonElement>('btn-chapter-next');
+  const adventureChapterLabel = requireElement<HTMLElement>('adventure-chapter-label');
+  const adventureChapterStars = requireElement<HTMLElement>('adventure-chapter-stars');
   const adventureSectorTitle = requireElement<HTMLElement>('adventure-sector-title');
   const adventureStarsTotal = requireElement<HTMLElement>('adventure-stars-total');
   const adventureSectorSubtitle = requireElement<HTMLElement>('adventure-sector-subtitle');
@@ -230,14 +247,16 @@ function bootstrap(): void {
     syncRouteToUrl('adventure', engine.state.adventureSectorId);
   }
 
-  const sectorPills: SectorPillRef[] = ADVENTURE_SECTORS.map((sector) => {
+  let viewedChapterId = getSectorById(engine.state.adventureSectorId).chapterId;
+
+  const sectorPills: SectorPillRef[] = Array.from({ length: SECTORS_PER_PAGE }, (_, index) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'sector-pill';
 
     const codeEl = document.createElement('span');
     codeEl.className = 'sector-code';
-    codeEl.textContent = sector.code;
+    codeEl.textContent = String(index + 1).padStart(2, '0');
 
     const starsEl = document.createElement('span');
     starsEl.className = 'sector-stars';
@@ -254,6 +273,8 @@ function bootstrap(): void {
     button.appendChild(codeEl);
     button.appendChild(starsEl);
 
+    const pillRef: SectorPillRef = { sectorId: index + 1, button, codeEl, dots };
+
     button.addEventListener('pointerdown', (e: PointerEvent) => {
       e.stopPropagation();
     });
@@ -263,12 +284,12 @@ function bootstrap(): void {
         return;
       }
       audio.unlock();
-      selectSector(sector.id);
+      selectSector(pillRef.sectorId);
       button.blur();
     });
 
     adventureSectorGrid.appendChild(button);
-    return { id: sector.id, button, dots };
+    return pillRef;
   });
 
   const ui: UiSnapshot = {
@@ -385,22 +406,53 @@ function bootstrap(): void {
     const highestUnlocked = engine.getHighestUnlockedSectorId();
     const totalStars = getTotalAdventureStars(progress);
     const activeSector = getSectorById(activeSectorId);
+    const viewedChapter = getChapterById(viewedChapterId);
+    const chapterSectors = getSectorsByChapter(viewedChapter.id);
+    const chapterStars = getChapterStarCounts(viewedChapter.id, progress);
+    const isViewingActiveChapter = viewedChapter.id === activeSector.chapterId;
+
+    adventureChapterLabel.textContent = `CH ${viewedChapter.code} · ${viewedChapter.name}`;
+    adventureChapterLabel.dataset.accent = viewedChapter.accent;
+    adventureChapterStars.textContent = `★ ${chapterStars.earned}/${chapterStars.max}`;
+    adventureChapterStars.setAttribute(
+      'aria-label',
+      `Chapter ${viewedChapter.code} ${viewedChapter.name}: ${chapterStars.earned} of ${chapterStars.max} stars earned`
+    );
+    btnChapterPrev.disabled = viewedChapter.id <= 1;
+    btnChapterNext.disabled = viewedChapter.id >= ADVENTURE_CHAPTERS.length;
+    adventureSectorGrid.setAttribute(
+      'aria-label',
+      `Chapter ${viewedChapter.code} ${viewedChapter.name} sectors`
+    );
 
     adventureSectorTitle.textContent = `SECTOR ${activeSector.code} · ${activeSector.name}`;
-    adventureSectorSubtitle.textContent = activeSector.subtitle;
+    adventureSectorSubtitle.textContent = isViewingActiveChapter
+      ? activeSector.subtitle
+      : viewedChapter.tagline;
+    adventureSectorSubtitle.classList.toggle('is-preview', !isViewingActiveChapter);
     adventureStarsTotal.textContent = `★ ${totalStars}/${MAX_ADVENTURE_STARS}`;
     adventureStarsTotal.setAttribute(
       'aria-label',
       `${totalStars} of ${MAX_ADVENTURE_STARS} adventure stars earned`
     );
 
-    for (const pill of sectorPills) {
-      const sector = getSectorById(pill.id);
-      const entry = progress[pill.id];
+    for (let idx = 0; idx < sectorPills.length; idx += 1) {
+      const pill = sectorPills[idx];
+      const sector = chapterSectors[idx];
+      if (!sector) {
+        pill.button.hidden = true;
+        continue;
+      }
+
+      pill.button.hidden = false;
+      pill.sectorId = sector.id;
+      pill.codeEl.textContent = sector.code;
+
+      const entry = progress[sector.id];
       const stars = entry?.stars ?? 0;
       const cleared = Boolean(entry?.cleared);
-      const locked = pill.id > highestUnlocked;
-      const isActive = pill.id === activeSectorId;
+      const locked = sector.id > highestUnlocked;
+      const isActive = sector.id === activeSectorId;
 
       pill.button.disabled = locked;
       pill.button.classList.toggle('is-active', isActive);
@@ -421,6 +473,18 @@ function bootstrap(): void {
         pill.dots[i].classList.toggle('is-earned', i < stars);
       }
     }
+  }
+
+  function stepViewedChapter(delta: number): void {
+    const nextChapterId = Math.max(
+      1,
+      Math.min(ADVENTURE_CHAPTERS.length, viewedChapterId + delta)
+    );
+    if (nextChapterId === viewedChapterId) {
+      return;
+    }
+    viewedChapterId = nextChapterId;
+    syncAdventurePanel(engine.state.adventureSectorId);
   }
 
   function switchMode(mode: GameMode): void {
@@ -477,10 +541,11 @@ function bootstrap(): void {
 
       if (isAdventure) {
         const sector = getSectorById(state.adventureSectorId);
+        viewedChapterId = sector.chapterId;
         hudBestLabel.textContent = `SECTOR ${sector.code}`;
         goBestLabel.textContent = 'SECTOR BEST';
         btnPlayAgainLabel.textContent = 'Retry Sector';
-        startKicker.textContent = `ADVENTURE CAMPAIGN // ${ADVENTURE_SECTORS.length} SECTORS`;
+        startKicker.textContent = `CAMPAIGN // ${ADVENTURE_CHAPTERS.length} CHAPTERS · ${ADVENTURE_SECTORS.length} SECTORS`;
       } else {
         hudBestLabel.textContent = 'BEST';
         goBestLabel.textContent = 'BEST';
@@ -545,11 +610,14 @@ function bootstrap(): void {
     if (state.status === 'victory' && statusChanged) {
       const summary = state.adventureSummary;
       const sector = getSectorById(summary?.sectorId ?? state.adventureSectorId);
+      const chapter = getChapterById(sector.chapterId);
       const starsEarned = Math.max(0, Math.min(3, summary?.starsEarned ?? 1));
       const hasNext = Boolean(summary?.hasNextSector);
 
-      victoryTitle.textContent = `SECTOR ${sector.code} CLEARED`;
-      victorySubtitle.textContent = sector.name;
+      victoryTitle.textContent = hasNext
+        ? `SECTOR ${sector.code} CLEARED`
+        : 'CAMPAIGN COMPLETE';
+      victorySubtitle.textContent = `CH ${chapter.code} · ${sector.name}`;
       victoryStars.setAttribute('aria-label', `${starsEarned} of 3 stars earned`);
 
       for (let i = 0; i < victoryStarEls.length; i += 1) {
@@ -580,8 +648,17 @@ function bootstrap(): void {
       victoryBest.textContent = String(state.bestScore);
       victoryNewBest.hidden = !state.isNewBest;
 
-      btnVictoryNextLabel.textContent = hasNext ? 'Next Sector' : 'Play Endless';
-      btnVictoryNextKey.hidden = !hasNext;
+      if (hasNext) {
+        const nextSector = getSectorById(sector.id + 1);
+        const nextChapter = getChapterById(nextSector.chapterId);
+        btnVictoryNextLabel.textContent =
+          sector.id === chapter.endSectorId && nextChapter.id !== chapter.id
+            ? `Chapter ${nextChapter.code} →`
+            : 'Next Sector';
+      } else {
+        btnVictoryNextLabel.textContent = 'Play Endless';
+      }
+      btnVictoryNextKey.hidden = false;
     }
 
     if (state.status === 'gameover') {
@@ -599,9 +676,10 @@ function bootstrap(): void {
 
         if (isAdventure) {
           const sector = getSectorById(state.adventureSectorId);
+          const chapter = getChapterById(sector.chapterId);
           const current = Math.max(0, state.adventureCurrentAnchorIndex);
           const total = Math.max(1, state.adventureTotalAnchors);
-          gameoverMode.textContent = `SECTOR ${sector.code} · ${sector.name} · ${current}/${total} ORBITS`;
+          gameoverMode.textContent = `CH ${chapter.code} · SECTOR ${sector.code} · ${sector.name} · ${current}/${total}`;
         } else {
           const orbitsLabel = state.anchorsCaptured === 1 ? '1 ORBIT' : `${state.anchorsCaptured} ORBITS`;
           gameoverMode.textContent = `ENDLESS SECTOR · ${orbitsLabel}`;
@@ -720,6 +798,26 @@ function bootstrap(): void {
   // Prevent canvas drag when interacting anywhere on the Adventure panel
   adventurePanel.addEventListener('pointerdown', (e: PointerEvent) => {
     e.stopPropagation();
+  });
+
+  btnChapterPrev.addEventListener('pointerdown', (e: PointerEvent) => {
+    e.stopPropagation();
+  });
+  btnChapterPrev.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    audio.unlock();
+    stepViewedChapter(-1);
+    btnChapterPrev.blur();
+  });
+
+  btnChapterNext.addEventListener('pointerdown', (e: PointerEvent) => {
+    e.stopPropagation();
+  });
+  btnChapterNext.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    audio.unlock();
+    stepViewedChapter(1);
+    btnChapterNext.blur();
   });
 
   // Tap/click outside the Game Over card for quick mobile restart
@@ -880,7 +978,7 @@ function bootstrap(): void {
         if (engine.state.adventureSummary?.hasNextSector) {
           advanceToNextSector();
         } else {
-          restartGame();
+          switchMode('endless');
         }
         return;
       }

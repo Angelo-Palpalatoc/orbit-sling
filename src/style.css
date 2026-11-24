@@ -255,7 +255,7 @@ body,
 }
 
 .start-overlay.is-adventure {
-  padding-top: calc(10.5vh + env(safe-area-inset-top, 0px));
+  padding-top: calc(9.5vh + env(safe-area-inset-top, 0px));
 }
 
 .start-overlay.is-hidden {
@@ -361,7 +361,7 @@ body,
   width: 100%;
   max-width: 356px;
   margin-top: 6px;
-  padding: 11px 12px 12px;
+  padding: 10px 12px 11px;
   border-radius: 14px;
   background: rgba(11, 16, 27, 0.8);
   border: 1px solid var(--border-hairline);
@@ -371,6 +371,107 @@ body,
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   text-align: left;
+}
+
+.chapter-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin-bottom: 8px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid var(--border-subtle);
+}
+
+.chapter-nav-btn {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 100%;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--slate-light);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 130ms ease,
+    border-color 130ms ease,
+    color 130ms ease,
+    transform 110ms ease;
+}
+
+.chapter-nav-btn::before {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+
+.chapter-nav-btn:hover:not(:disabled) {
+  background: rgba(30, 41, 59, 0.92);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--white);
+}
+
+.chapter-nav-btn:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.chapter-nav-btn:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.chapter-nav-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.chapter-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.chapter-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  color: var(--cyan-soft);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chapter-label[data-accent='coral'] {
+  color: var(--coral-soft);
+}
+
+.chapter-label[data-accent='gold'] {
+  color: var(--gold-soft);
+}
+
+.chapter-stars {
+  flex-shrink: 0;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--slate-light);
+  white-space: nowrap;
 }
 
 .adventure-header {
@@ -402,7 +503,7 @@ body,
 
 .adventure-sector-subtitle {
   margin-top: 3px;
-  margin-bottom: 10px;
+  margin-bottom: 9px;
   font-size: 0.68rem;
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -411,6 +512,10 @@ body,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.adventure-sector-subtitle.is-preview {
+  color: var(--slate-light);
 }
 
 .adventure-sector-grid {
@@ -1089,13 +1194,48 @@ body,
   }
 
   .start-overlay.is-adventure {
-    padding-top: calc(64px + env(safe-area-inset-top, 0px));
-    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    padding-top: calc(58px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .start-overlay.is-adventure .title-lockup {
+    gap: 5px;
+  }
+
+  .start-overlay.is-adventure .title-kicker {
+    font-size: 0.64rem;
+    letter-spacing: 0.18em;
+  }
+
+  .start-overlay.is-adventure .title-heading {
+    font-size: clamp(1.65rem, 6vw, 2.2rem);
+  }
+
+  .start-overlay.is-adventure .mode-toggle {
+    margin-top: 4px;
   }
 
   .adventure-panel {
-    padding: 9px 10px 10px;
-    margin-top: 4px;
+    padding: 8px 10px 9px;
+    margin-top: 3px;
+  }
+
+  .chapter-pager {
+    height: 28px;
+    margin-bottom: 6px;
+  }
+
+  .chapter-nav-btn {
+    width: 32px;
+  }
+
+  .chapter-label {
+    font-size: 0.64rem;
+    letter-spacing: 0.09em;
+  }
+
+  .chapter-stars {
+    font-size: 0.62rem;
   }
 
   .adventure-sector-title,
@@ -1104,8 +1244,9 @@ body,
   }
 
   .adventure-sector-subtitle {
-    font-size: 0.64rem;
-    margin-bottom: 8px;
+    font-size: 0.63rem;
+    margin-top: 2px;
+    margin-bottom: 7px;
   }
 
   .adventure-sector-grid {
@@ -1113,8 +1254,8 @@ body,
   }
 
   .sector-pill {
-    min-height: 36px;
-    padding: 5px 2px 4px;
+    min-height: 34px;
+    padding: 4px 2px 4px;
   }
 
   .sector-code {
@@ -1196,6 +1337,7 @@ body,
   .start-overlay,
   .icon-btn,
   .mode-btn,
+  .chapter-nav-btn,
   .sector-pill,
   .primary-btn,
   .secondary-btn {

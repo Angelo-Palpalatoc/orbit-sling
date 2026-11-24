@@ -119,10 +119,13 @@ export class AudioEngine {
 
     switch (event.type) {
       case 'launch':
-        this.playLaunch(ctx, master, event.power);
+        this.playLaunch(ctx, master, event.power, Boolean(event.boosted));
         break;
       case 'capture':
         this.playCapture(ctx, master, event.combo, event.skipped, event.isNewAnchor);
+        break;
+      case 'deflect':
+        this.playDeflect(ctx, master);
         break;
       case 'shard':
         this.playShard(ctx, master, event.combo);
@@ -185,7 +188,12 @@ export class AudioEngine {
     this.masterGain.gain.setTargetAtTime(target, now, 0.015);
   }
 
-  private playLaunch(ctx: AudioContext, destination: AudioNode, power: number): void {
+  private playLaunch(
+    ctx: AudioContext,
+    destination: AudioNode,
+    power: number,
+    boosted = false
+  ): void {
     const now = ctx.currentTime;
     const p = clamp(power, 0, 1);
 
@@ -233,6 +241,63 @@ export class AudioEngine {
 
     subOsc.start(now);
     subOsc.stop(now + 0.16);
+
+    // 3. Harmonic overdrive pitch rise when launching from a Boost anchor
+    if (boosted) {
+      const boostOsc = ctx.createOscillator();
+      boostOsc.type = 'triangle';
+      boostOsc.frequency.setValueAtTime(320, now);
+      boostOsc.frequency.exponentialRampToValueAtTime(640, now + 0.14);
+
+      const boostGain = ctx.createGain();
+      boostGain.gain.setValueAtTime(0.0001, now);
+      boostGain.gain.linearRampToValueAtTime(0.075, now + 0.014);
+      boostGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+
+      boostOsc.connect(boostGain);
+      boostGain.connect(destination);
+
+      boostOsc.start(now);
+      boostOsc.stop(now + 0.18);
+    }
+  }
+
+  private playDeflect(ctx: AudioContext, destination: AudioNode): void {
+    const now = ctx.currentTime;
+
+    // 1. Tactile crystalline body ping (triangle 520Hz -> 310Hz over 110ms)
+    const bodyOsc = ctx.createOscillator();
+    bodyOsc.type = 'triangle';
+    bodyOsc.frequency.setValueAtTime(520, now);
+    bodyOsc.frequency.exponentialRampToValueAtTime(310, now + 0.11);
+
+    const bodyGain = ctx.createGain();
+    bodyGain.gain.setValueAtTime(0.0001, now);
+    bodyGain.gain.linearRampToValueAtTime(0.12, now + 0.006);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.125);
+
+    bodyOsc.connect(bodyGain);
+    bodyGain.connect(destination);
+
+    bodyOsc.start(now);
+    bodyOsc.stop(now + 0.14);
+
+    // 2. Detuned metallic overtone shimmer (sine 1180Hz -> 790Hz over 110ms)
+    const pingOsc = ctx.createOscillator();
+    pingOsc.type = 'sine';
+    pingOsc.frequency.setValueAtTime(1180, now);
+    pingOsc.frequency.exponentialRampToValueAtTime(790, now + 0.11);
+
+    const pingGain = ctx.createGain();
+    pingGain.gain.setValueAtTime(0.0001, now);
+    pingGain.gain.linearRampToValueAtTime(0.075, now + 0.005);
+    pingGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+
+    pingOsc.connect(pingGain);
+    pingGain.connect(destination);
+
+    pingOsc.start(now);
+    pingOsc.stop(now + 0.135);
   }
 
   private playCapture(

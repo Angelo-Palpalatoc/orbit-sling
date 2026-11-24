@@ -21,8 +21,10 @@ import {
   type HazardDrone,
   type Particle,
   type Probe,
+  type RepulsorNode,
   type SectorDefinition,
   type SectorProgress,
+  type ShieldArc,
   type Shockwave,
   type TrajectoryPoint,
   type Vec2,
@@ -89,6 +91,61 @@ function randomRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
+function shortestAngleDelta(a: number, b: number): number {
+  let delta = (a - b) % (Math.PI * 2);
+  if (delta > Math.PI) {
+    delta -= Math.PI * 2;
+  } else if (delta < -Math.PI) {
+    delta += Math.PI * 2;
+  }
+  return delta;
+}
+
+function tryDeflectOffShield(
+  pos: Vec2,
+  vel: Vec2,
+  anchorX: number,
+  anchorY: number,
+  captureRadius: number,
+  shieldAngle: number,
+  shieldArcSpan: number
+): boolean {
+  const rx = pos.x - anchorX;
+  const ry = pos.y - anchorY;
+  const dist = Math.hypot(rx, ry);
+  const entryAngle = dist > 1e-4 ? Math.atan2(ry, rx) : shieldAngle;
+
+  if (Math.abs(shortestAngleDelta(entryAngle, shieldAngle)) <= shieldArcSpan * 0.5) {
+    const nx = dist > 1e-4 ? rx / dist : Math.cos(shieldAngle);
+    const ny = dist > 1e-4 ? ry / dist : Math.sin(shieldAngle);
+    const vn = vel.x * nx + vel.y * ny;
+
+    // Guard against interior outward exits (e.g., weak launch crossing behind own shield)
+    if (vn > 0 && dist < captureRadius - 14) {
+      return false;
+    }
+
+    pos.x = anchorX + nx * (captureRadius + 2.5);
+    pos.y = anchorY + ny * (captureRadius + 2.5);
+
+    if (vn < 0) {
+      vel.x -= 1.88 * vn * nx;
+      vel.y -= 1.88 * vn * ny;
+    }
+
+    const postVn = vel.x * nx + vel.y * ny;
+    if (postVn < 140) {
+      const push = 140 - postVn;
+      vel.x += nx * push;
+      vel.y += ny * push;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 function loadBestScore(storageKey: string): number {
   try {
     if (typeof localStorage === 'undefined') return 0;
@@ -121,6 +178,7 @@ function createEmptyAim(): AimState {
     trajectory: [],
     lockedAnchorId: null,
     hitsHazard: false,
+    deflectsOffShield: false,
   };
 }
 
@@ -147,7 +205,8 @@ export function stepGravityFlight(
   launchAnchorId: number | null,
   flightTime: number,
   dt: number,
-  anchorXOverrides?: readonly number[]
+  anchorXOverrides?: readonly number[],
+  repulsors?: readonly RepulsorNode[]
 ): void {
   for (let i = 0; i < anchors.length; i++) {
     const anchor = anchors[i];
@@ -167,6 +226,24 @@ export function stepGravityFlight(
       const invDist = 1 / dist;
       vel.x += dx * invDist * accel * dt;
       vel.y += dy * invDist * accel * dt;
+    }
+  }
+
+  if (repulsors) {
+    for (let i = 0; i < repulsors.length; i++) {
+      const repulsor = repulsors[i];
+      const dx = repulsor.x - pos.x;
+      const dy = repulsor.y - pos.y;
+      const distSq = dx * dx + dy * dy;
+      const dist = Math.sqrt(distSq);
+
+      if (dist > 1e-6 && dist < repulsor.range) {
+        const softening = repulsor.coreRadius * 2.4;
+        const accel = repulsor.strength / (distSq + softening * softening);
+        const invDist = 1 / dist;
+        vel.x -= dx * invDist * accel * dt;
+        vel.y -= dy * invDist * accel * dt;
+      }
     }
   }
 
@@ -316,6 +393,7 @@ export class GameEngine {
       hitStopRemaining: 0,
       probe: startProbe,
       anchors: [],
+      repulsors: [],
       shards: [],
       particles: [],
       shockwaves: [],
@@ -371,6 +449,7 @@ export class GameEngine {
     this.state.hitStopRemaining = 0;
 
     this.state.anchors.length = 0;
+    this.state.repulsors.length = 0;
     this.state.shards.length = 0;
     this.state.particles.length = 0;
     this.state.shockwaves.length = 0;
@@ -407,7 +486,10 @@ export class GameEngine {
       decayActive: false,
       visited: true,
       isGoal: false,
+      boostMultiplier: 1.0,
+      shield: null,
       capturePulse: 0,
+      deflectPulse: 0,
       drones: [],
     };
     this.state.anchors.push(startAnchor);
@@ -486,6 +568,7 @@ export class GameEngine {
     aim.trajectory.length = 0;
     aim.lockedAnchorId = null;
     aim.hitsHazard = false;
+    aim.deflectsOffShield = false;
   }
 
   updateAim(screenX: number, screenY: number, viewport: ViewportMetrics): void {
@@ -537,6 +620,8 @@ export class GameEngine {
     const launchVy = aim.launchVelocity.y;
 
     const launchAnchor = this.findAnchorById(probe.anchorId);
+    const boost = launchAnchor ? launchAnchor.boostMultiplier : 1.0;
+    const boosted = boost > 1.05;
     if (launchAnchor) {
       launchAnchor.decayActive = false;
     }
@@ -551,8 +636,11 @@ export class GameEngine {
     this.decayWarnCooldown = 0;
     this.clearAim();
 
-    this.spawnLaunchParticles(probe.x, probe.y, launchVx, launchVy, power);
-    this.emit({ type: 'launch', power });
+    this.spawnLaunchParticles(probe.x, probe.y, launchVx, launchVy, power, boosted);
+    if (boosted) {
+      this.addCameraShake(1.8);
+    }
+    this.emit({ type: 'launch', power, boosted });
     return true;
   }
 
@@ -663,6 +751,10 @@ export class GameEngine {
             anchor.driftAmplitude;
       }
 
+      if (anchor.shield) {
+        anchor.shield.angle += anchor.shield.angularSpeed * dt;
+      }
+
       const drones = anchor.drones;
       for (let j = 0; j < drones.length; j++) {
         const drone = drones[j];
@@ -728,7 +820,9 @@ export class GameEngine {
       this.state.anchors,
       probe.launchAnchorId,
       probe.flightTime,
-      dt
+      dt,
+      undefined,
+      this.state.repulsors
     );
 
     probe.x = pos.x;
@@ -737,20 +831,62 @@ export class GameEngine {
     probe.vy = vel.y;
     probe.flightTime += dt;
 
-    // 1. Hazard drone collision check first
+    // 1. Hazard drone & repulsor core collision checks first
     if (this.checkDroneCollision(probe)) {
       this.triggerCrash('DRONE_COLLISION', null);
+      return true;
+    }
+
+    if (this.checkRepulsorCollision(probe)) {
+      this.triggerCrash('REPULSOR_IMPACT', null);
       return true;
     }
 
     // 2. Energy shard collection
     this.checkShardCollection(probe);
 
-    // 3. Anchor capture check
+    // 3. Anchor capture / rotating shield deflection check
     const capturedAnchor = this.findCapturedAnchor(probe);
     if (capturedAnchor) {
-      this.handleAnchorCapture(capturedAnchor);
-      return true;
+      if (capturedAnchor.shield) {
+        const probePos: Vec2 = { x: probe.x, y: probe.y };
+        const probeVel: Vec2 = { x: probe.vx, y: probe.vy };
+        if (
+          tryDeflectOffShield(
+            probePos,
+            probeVel,
+            capturedAnchor.x,
+            capturedAnchor.y,
+            capturedAnchor.captureRadius,
+            capturedAnchor.shield.angle,
+            capturedAnchor.shield.arcSpan
+          )
+        ) {
+          probe.x = probePos.x;
+          probe.y = probePos.y;
+          probe.vx = probeVel.x;
+          probe.vy = probeVel.y;
+          capturedAnchor.deflectPulse = 1.0;
+          this.addCameraShake(4.0);
+          this.spawnBurstParticles(
+            probe.x,
+            probe.y,
+            12,
+            PALETTE.coral,
+            PALETTE.coralSoft,
+            65,
+            195
+          );
+          this.spawnShockwave(probe.x, probe.y, 46, PALETTE.coralSoft, 0.3, 2.2);
+          this.emit({ type: 'deflect' });
+        } else {
+          this.handleAnchorCapture(capturedAnchor);
+          return true;
+        }
+      } else {
+        this.handleAnchorCapture(capturedAnchor);
+        return true;
+      }
     }
 
     // 4. Out-of-sector bounds check
@@ -759,6 +895,20 @@ export class GameEngine {
       return true;
     }
 
+    return false;
+  }
+
+  private checkRepulsorCollision(probe: Probe): boolean {
+    const repulsors = this.state.repulsors;
+    for (let i = 0; i < repulsors.length; i++) {
+      const repulsor = repulsors[i];
+      const hitRadius = Math.max(2, probe.radius + repulsor.coreRadius - 1.5);
+      const dx = probe.x - repulsor.x;
+      const dy = probe.y - repulsor.y;
+      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+        return true;
+      }
+    }
     return false;
   }
 
@@ -1066,15 +1216,19 @@ export class GameEngine {
       aim.trajectory.length = 0;
       aim.lockedAnchorId = null;
       aim.hitsHazard = false;
+      aim.deflectsOffShield = false;
       return;
     }
 
     const maxPull = Math.max(PHYSICS.MIN_PULL_PX + 1, this.currentMaxPullPx);
     const clamped = Math.min(pullDist, maxPull);
     const power = (clamped - PHYSICS.MIN_PULL_PX) / (maxPull - PHYSICS.MIN_PULL_PX);
+    const activeAnchor = this.findAnchorById(this.state.probe.anchorId);
+    const boost = activeAnchor ? activeAnchor.boostMultiplier : 1.0;
     const speed =
-      PHYSICS.MIN_LAUNCH_SPEED +
-      (PHYSICS.MAX_LAUNCH_SPEED - PHYSICS.MIN_LAUNCH_SPEED) * Math.pow(power, 0.92);
+      (PHYSICS.MIN_LAUNCH_SPEED +
+        (PHYSICS.MAX_LAUNCH_SPEED - PHYSICS.MIN_LAUNCH_SPEED) * Math.pow(power, 0.92)) *
+      boost;
 
     const invDist = 1 / pullDist;
     aim.valid = true;
@@ -1089,11 +1243,13 @@ export class GameEngine {
     const aim = this.state.aim;
     const probe = this.state.probe;
     const anchors = this.state.anchors;
+    const repulsors = this.state.repulsors;
 
     const trajectory: TrajectoryPoint[] = aim.trajectory;
     trajectory.length = 0;
     aim.lockedAnchorId = null;
     aim.hitsHazard = false;
+    aim.deflectsOffShield = false;
 
     const simPos: Vec2 = { x: probe.x, y: probe.y };
     const simVel: Vec2 = { x: aim.launchVelocity.x, y: aim.launchVelocity.y };
@@ -1103,6 +1259,7 @@ export class GameEngine {
     const anchorXOverrides = this.previewAnchorX;
     anchorXOverrides.length = anchors.length;
     let simTime = 0;
+    let shieldBounces = 0;
 
     for (let step = 1; step <= PHYSICS.TRAJECTORY_STEPS; step++) {
       // Match live flight's advanceWorldBodies(dt) occurring before stepFlyingProbe(dt)
@@ -1116,7 +1273,16 @@ export class GameEngine {
             : anchor.x;
       }
 
-      stepGravityFlight(simPos, simVel, anchors, launchAnchorId, simTime, dt, anchorXOverrides);
+      stepGravityFlight(
+        simPos,
+        simVel,
+        anchors,
+        launchAnchorId,
+        simTime,
+        dt,
+        anchorXOverrides,
+        repulsors
+      );
       simTime += dt;
 
       // Predict hazard drone collision using each drone's future orbital angle & drifted anchor X
@@ -1147,7 +1313,21 @@ export class GameEngine {
         return;
       }
 
-      // Predict clean entry into any non-ignored anchor's capture zone at its drifted X
+      // Predict repulsor core collision using exact same radius as live flight
+      for (let i = 0; i < repulsors.length; i++) {
+        const repulsor = repulsors[i];
+        const hitR = Math.max(2, probe.radius + repulsor.coreRadius - 1.5);
+        const dx = simPos.x - repulsor.x;
+        const dy = simPos.y - repulsor.y;
+        if (dx * dx + dy * dy <= hitR * hitR) {
+          trajectory.push({ x: simPos.x, y: simPos.y, t: simTime });
+          aim.hitsHazard = true;
+          return;
+        }
+      }
+
+      // Predict clean entry or rotating shield deflection on any non-ignored anchor
+      let deflectedThisStep = false;
       for (let i = 0; i < anchors.length; i++) {
         const anchor = anchors[i];
         if (anchor.id === launchAnchorId && simTime < PHYSICS.LAUNCH_GRACE_TIME) {
@@ -1156,13 +1336,37 @@ export class GameEngine {
         const dx = simPos.x - anchorXOverrides[i];
         const dy = simPos.y - anchor.y;
         if (dx * dx + dy * dy <= anchor.captureRadius * anchor.captureRadius) {
+          if (anchor.shield) {
+            const futureShieldAngle = anchor.shield.angle + anchor.shield.angularSpeed * simTime;
+            if (
+              tryDeflectOffShield(
+                simPos,
+                simVel,
+                anchorXOverrides[i],
+                anchor.y,
+                anchor.captureRadius,
+                futureShieldAngle,
+                anchor.shield.arcSpan
+              )
+            ) {
+              aim.deflectsOffShield = true;
+              trajectory.push({ x: simPos.x, y: simPos.y, t: simTime });
+              shieldBounces += 1;
+              deflectedThisStep = true;
+              if (shieldBounces > 2) {
+                return;
+              }
+              break;
+            }
+          }
+
           trajectory.push({ x: simPos.x, y: simPos.y, t: simTime });
           aim.lockedAnchorId = anchor.id;
           return;
         }
       }
 
-      if (step % PHYSICS.TRAJECTORY_SAMPLE_STRIDE === 0) {
+      if (!deflectedThisStep && step % PHYSICS.TRAJECTORY_SAMPLE_STRIDE === 0) {
         trajectory.push({ x: simPos.x, y: simPos.y, t: simTime });
       }
     }
@@ -1200,7 +1404,10 @@ export class GameEngine {
       ) * sector.gravityMultiplier;
     const gravityRange = captureRadius * 3.2 + 45;
 
-    let dy = clamp(lerp(205, 240, progress) + this.levelRange(-12, 20), 195, 260);
+    const fromBoost = prev.boostMultiplier > 1.05;
+    let dy = fromBoost
+      ? clamp(lerp(245, 295, progress) + this.levelRange(-10, 22), 235, 320)
+      : clamp(lerp(205, 240, progress) + this.levelRange(-12, 20), 195, 260);
 
     const maxAbsX = isGoal ? 135 : 175;
     let sideSign: number;
@@ -1220,7 +1427,7 @@ export class GameEngine {
       baseX = clamp(prev.baseX + flipSign * this.levelRange(75, 145), -maxAbsX, maxAbsX);
     }
 
-    const maxCenterDist = 302;
+    const maxCenterDist = fromBoost ? 355 : 302;
     const minCenterDist = prev.captureRadius + captureRadius + 55;
 
     let dx = baseX - prev.baseX;
@@ -1235,7 +1442,7 @@ export class GameEngine {
 
     if (centerDist < minCenterDist) {
       const neededDy = Math.sqrt(Math.max(0, minCenterDist * minCenterDist - dx * dx));
-      dy = clamp(Math.max(dy, neededDy), 195, 265);
+      dy = clamp(Math.max(dy, neededDy), fromBoost ? 235 : 195, fromBoost ? 320 : 265);
     }
 
     const baseY = prev.baseY - dy;
@@ -1290,6 +1497,33 @@ export class GameEngine {
       }
     }
 
+    let shield: ShieldArc | null = null;
+    if (
+      !isGoal &&
+      index >= 2 &&
+      sector.shieldChance > 0 &&
+      ((sector.id === 21 && index === 2) || this.levelRng() < sector.shieldChance)
+    ) {
+      shield = {
+        angle: this.levelRng() * Math.PI * 2,
+        angularSpeed:
+          (this.levelRng() < 0.5 ? 1 : -1) *
+          this.levelRange(0.75, 1.3) *
+          sector.shieldSpeedScale,
+        arcSpan: this.levelRange(Math.PI * 0.58, Math.PI * 0.88),
+      };
+    }
+
+    let boostMultiplier = 1.0;
+    if (
+      !isGoal &&
+      sector.boostChance > 0 &&
+      ((sector.id === 31 && index === 1) ||
+        (index >= 1 && index < sector.anchorCount && this.levelRng() < sector.boostChance))
+    ) {
+      boostMultiplier = Math.max(1.0, sector.boostMultiplier);
+    }
+
     const nextAnchor: Anchor = {
       id: this.allocateId(),
       index,
@@ -1311,12 +1545,21 @@ export class GameEngine {
       decayActive: false,
       visited: false,
       isGoal,
+      boostMultiplier,
+      shield,
       capturePulse: 0,
+      deflectPulse: 0,
       drones,
     };
 
     this.state.anchors.push(nextAnchor);
     this.spawnShardsBetween(prev, nextAnchor);
+    if (
+      sector.repulsorChance > 0 &&
+      ((sector.id === 11 && index === 1) || this.levelRng() < sector.repulsorChance)
+    ) {
+      this.spawnRepulsorBetween(prev, nextAnchor, sector.repulsorStrengthScale);
+    }
   }
 
   private spawnNextAnchor(): void {
@@ -1334,7 +1577,10 @@ export class GameEngine {
     );
     const gravityRange = captureRadius * 3.2 + 45;
 
-    let dy = clamp(lerp(205, 245, difficulty) + this.levelRange(-12, 22), 195, 265);
+    const fromBoost = prev.boostMultiplier > 1.05;
+    let dy = fromBoost
+      ? clamp(lerp(245, 295, difficulty) + this.levelRange(-10, 22), 235, 320)
+      : clamp(lerp(205, 245, difficulty) + this.levelRange(-12, 22), 195, 265);
 
     // Choose horizontal side to encourage fun angled slingshot arcs
     let sideSign: number;
@@ -1355,8 +1601,8 @@ export class GameEngine {
       baseX = clamp(prev.baseX + flipSign * this.levelRange(75, 145), -175, 175);
     }
 
-    // Guarantee center-to-center distance <= 305 and non-overlapping capture rings
-    const maxCenterDist = 302;
+    // Guarantee reachable center-to-center distance and non-overlapping capture rings
+    const maxCenterDist = fromBoost ? 355 : 302;
     const minCenterDist = prev.captureRadius + captureRadius + 55;
 
     let dx = baseX - prev.baseX;
@@ -1371,7 +1617,7 @@ export class GameEngine {
 
     if (centerDist < minCenterDist) {
       const neededDy = Math.sqrt(Math.max(0, minCenterDist * minCenterDist - dx * dx));
-      dy = clamp(Math.max(dy, neededDy), 195, 265);
+      dy = clamp(Math.max(dy, neededDy), fromBoost ? 235 : 195, fromBoost ? 320 : 265);
     }
 
     const baseY = prev.baseY - dy;
@@ -1428,6 +1674,20 @@ export class GameEngine {
       }
     }
 
+    let shield: ShieldArc | null = null;
+    if (index >= 18 && this.levelRng() < 0.25) {
+      shield = {
+        angle: this.levelRng() * Math.PI * 2,
+        angularSpeed: (this.levelRng() < 0.5 ? 1 : -1) * this.levelRange(0.78, 1.32),
+        arcSpan: this.levelRange(Math.PI * 0.58, Math.PI * 0.86),
+      };
+    }
+
+    let boostMultiplier = 1.0;
+    if (index >= 12 && this.levelRng() < 0.22) {
+      boostMultiplier = 1.32;
+    }
+
     const nextAnchor: Anchor = {
       id: this.allocateId(),
       index,
@@ -1449,12 +1709,18 @@ export class GameEngine {
       decayActive: false,
       visited: false,
       isGoal: false,
+      boostMultiplier,
+      shield,
       capturePulse: 0,
+      deflectPulse: 0,
       drones,
     };
 
     this.state.anchors.push(nextAnchor);
     this.spawnShardsBetween(prev, nextAnchor);
+    if (index >= 14 && this.levelRng() < 0.28) {
+      this.spawnRepulsorBetween(prev, nextAnchor, 1.0);
+    }
   }
 
   private spawnShardsBetween(prev: Anchor, next: Anchor): void {
@@ -1510,6 +1776,104 @@ export class GameEngine {
     }
   }
 
+  private spawnRepulsorBetween(prev: Anchor, next: Anchor, strengthScale: number): void {
+    const dx = next.baseX - prev.baseX;
+    const dy = next.baseY - prev.baseY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1) return;
+
+    const coreRadius = 12;
+    const range = 135;
+    const strength = 1_550_000 * strengthScale;
+
+    const perpX = -dy / dist;
+    const perpY = dx / dist;
+    const midX = (prev.baseX + next.baseX) * 0.5;
+    const midY = (prev.baseY + next.baseY) * 0.5;
+    const offsetMag = this.levelRange(78, 112);
+
+    // Prefer the side opposite any shards placed in this corridor, or closer to x = 0
+    const minY = Math.min(prev.baseY, next.baseY);
+    const maxY = Math.max(prev.baseY, next.baseY);
+    let shardProjSum = 0;
+    let shardProjCount = 0;
+    const shards = this.state.shards;
+    for (let i = 0; i < shards.length; i++) {
+      const s = shards[i];
+      if (s.y >= minY && s.y <= maxY) {
+        shardProjSum += (s.x - midX) * perpX + (s.y - midY) * perpY;
+        shardProjCount += 1;
+      }
+    }
+
+    let preferredSign: 1 | -1;
+    if (shardProjCount > 0 && Math.abs(shardProjSum) > 1) {
+      preferredSign = shardProjSum > 0 ? -1 : 1;
+    } else {
+      const plusX = clamp(midX + perpX * offsetMag, -205, 205);
+      const minusX = clamp(midX - perpX * offsetMag, -205, 205);
+      preferredSign = Math.abs(plusX) <= Math.abs(minusX) ? 1 : -1;
+    }
+
+    const candidateSigns: readonly (1 | -1)[] = [
+      preferredSign,
+      preferredSign === 1 ? -1 : 1,
+    ];
+
+    const minPrevClearance = prev.captureRadius + coreRadius + 42;
+    const minNextClearance = next.captureRadius + coreRadius + 42;
+
+    for (let c = 0; c < candidateSigns.length; c++) {
+      const sign = candidateSigns[c];
+      const rx = clamp(midX + perpX * offsetMag * sign, -205, 205);
+      const ry = midY + perpY * offsetMag * sign;
+
+      // Account for worst-case horizontal drift so moving anchors & their drones never sweep into repulsors
+      const prevMinDx = Math.max(0, Math.abs(rx - prev.baseX) - prev.driftAmplitude);
+      const nextMinDx = Math.max(0, Math.abs(rx - next.baseX) - next.driftAmplitude);
+      if (Math.hypot(prevMinDx, ry - prev.baseY) < minPrevClearance) {
+        continue;
+      }
+      if (Math.hypot(nextMinDx, ry - next.baseY) < minNextClearance) {
+        continue;
+      }
+
+      let blocked = false;
+      for (let i = 0; i < shards.length; i++) {
+        const shard = shards[i];
+        const minShardDist = coreRadius + shard.radius + 16;
+        if (Math.hypot(rx - shard.x, ry - shard.y) < minShardDist) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+
+      const repulsors = this.state.repulsors;
+      for (let i = 0; i < repulsors.length; i++) {
+        const existing = repulsors[i];
+        const minRepDist = coreRadius + existing.coreRadius + 30;
+        if (Math.hypot(rx - existing.x, ry - existing.y) < minRepDist) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+
+      const repulsor: RepulsorNode = {
+        id: this.allocateId(),
+        x: rx,
+        y: ry,
+        coreRadius,
+        strength,
+        range,
+        pulsePhase: this.levelRng() * Math.PI * 2,
+      };
+      this.state.repulsors.push(repulsor);
+      return;
+    }
+  }
+
   private pruneBehindCamera(): void {
     if (this.state.mode === 'adventure') {
       return;
@@ -1526,6 +1890,16 @@ export class GameEngine {
       }
     }
     anchors.length = writeAnchor;
+
+    const repulsors = this.state.repulsors;
+    let writeRepulsor = 0;
+    for (let i = 0; i < repulsors.length; i++) {
+      const repulsor = repulsors[i];
+      if (repulsor.y <= cutoffY) {
+        repulsors[writeRepulsor++] = repulsor;
+      }
+    }
+    repulsors.length = writeRepulsor;
 
     const shards = this.state.shards;
     let writeShard = 0;
@@ -1576,6 +1950,9 @@ export class GameEngine {
     for (let i = 0; i < anchors.length; i++) {
       if (anchors[i].capturePulse > 0) {
         anchors[i].capturePulse = Math.max(0, anchors[i].capturePulse - dt * 2.2);
+      }
+      if (anchors[i].deflectPulse > 0) {
+        anchors[i].deflectPulse = Math.max(0, anchors[i].deflectPulse - dt * 2.8);
       }
     }
   }
@@ -1669,25 +2046,35 @@ export class GameEngine {
     y: number,
     vx: number,
     vy: number,
-    power: number
+    power: number,
+    boosted = false
   ): void {
     const speed = Math.hypot(vx, vy);
     if (speed < 1e-4) return;
     const backAngle = Math.atan2(-vy, -vx);
-    const count = Math.round(7 + power * 6);
+    const count = Math.round((boosted ? 12 : 7) + power * (boosted ? 9 : 6));
 
     for (let i = 0; i < count; i++) {
-      const spread = randomRange(-0.55, 0.55);
+      const spread = randomRange(boosted ? -0.62 : -0.55, boosted ? 0.62 : 0.55);
       const angle = backAngle + spread;
-      const pSpeed = randomRange(55, 145) * (0.6 + power * 0.65);
-      const maxLife = randomRange(0.22, 0.42);
+      const pSpeed = randomRange(55, boosted ? 185 : 145) * (0.6 + power * 0.65);
+      const maxLife = randomRange(0.22, boosted ? 0.48 : 0.42);
+      const color = boosted
+        ? i % 3 === 0
+          ? PALETTE.gold
+          : i % 3 === 1
+            ? PALETTE.cyan
+            : PALETTE.goldSoft
+        : i % 3 === 0
+          ? PALETTE.white
+          : PALETTE.cyanSoft;
       const particle: Particle = {
         x,
         y,
         vx: Math.cos(angle) * pSpeed,
         vy: Math.sin(angle) * pSpeed,
-        size: randomRange(1.8, 3.4),
-        color: i % 3 === 0 ? PALETTE.white : PALETTE.cyanSoft,
+        size: randomRange(boosted ? 2.1 : 1.8, boosted ? 3.9 : 3.4),
+        color,
         alpha: 1,
         life: 0,
         maxLife,
@@ -1806,6 +2193,7 @@ export class GameEngine {
     aim.trajectory.length = 0;
     aim.lockedAnchorId = null;
     aim.hitsHazard = false;
+    aim.deflectsOffShield = false;
   }
 
   private computeMaxPullPx(viewport: ViewportMetrics): number {

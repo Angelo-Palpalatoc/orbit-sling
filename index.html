@@ -83,9 +83,17 @@
 
           <!-- Compact Adventure Sector Selector -->
           <div id="adventure-panel" class="adventure-panel" hidden>
-            <div class="adventure-header">
+            <div class="chapter-pager">
+              <button id="btn-chapter-prev" class="chapter-nav-btn" type="button" aria-label="Previous chapter">‹</button>
+              <div class="chapter-meta">
+                <span id="adventure-chapter-label" class="chapter-label">CH 01 · LOW ORBIT</span>
+                <span id="adventure-chapter-stars" class="chapter-stars" aria-label="Chapter stars">★ 0/30</span>
+              </div>
+              <button id="btn-chapter-next" class="chapter-nav-btn" type="button" aria-label="Next chapter">›</button>
+            </div>
+            <div id="adventure-sector-header" class="adventure-header">
               <span id="adventure-sector-title" class="adventure-sector-title">SECTOR 01 · CALIBRATION</span>
-              <span id="adventure-stars-total" class="adventure-stars-total" aria-label="Total adventure stars">★ 0/30</span>
+              <span id="adventure-stars-total" class="adventure-stars-total" aria-label="Total adventure stars">★ 0/150</span>
             </div>
             <div id="adventure-sector-subtitle" class="adventure-sector-subtitle">
               Stable orbits · Learn the slingshot arc

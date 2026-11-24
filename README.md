@@ -2,18 +2,19 @@
 
 A minimalist 60fps orbital slingshot arcade game built with TypeScript, HTML5 Canvas 2D, and zero-asset procedural Web Audio.
 
-Drag anywhere to pull back, watch gravity bend your live trajectory preview through nearby orbital anchors, and chain clean captures as orbits decay, anchors drift, and hazard drones patrol higher sectors.
+Drag anywhere to pull back, watch gravity—and anti-gravity—bend your live trajectory preview through orbital anchors, and chain clean captures across **Endless** mode or a **5-Chapter, 50-Sector Adventure Campaign**.
 
 ## Core Mechanics
 
 - **Orbital Slingshot:** Your probe circles each captured anchor. Pull back anywhere on screen to aim and release to sling along a physics-simulated flight path.
-- **Live Gravity Trajectory Preview:** Aiming engages subtle slow-motion and predicts the exact curved gravity trajectory using the same fixed-timestep integrator as live flight—highlighting locked anchor captures and drone collision warnings.
-- **Decay Tension:** Higher-altitude anchors begin decaying the moment you enter orbit. Plan your next launch before the ring collapses.
-- **Combo Multiplier & Anchor Skips:** Chain consecutive new-anchor captures to build your combo multiplier (`x2`, `x3`, …) and skip past intermediate anchors for bonus points.
-- **Energy Shards:** Curve your flight path through floating shards between orbits for extra score.
-- **Progressive Difficulty:** As you climb, anchors introduce lateral drift, tighter decay timers, and orbiting hazard drones.
-- **Adventure Mode (10 Curated Sectors, Extraction Goal & 3-Star Mastery):** Switch between **Endless** and **Adventure** right on the start screen (deep-linkable via `?mode=adventure` or `?mode=adventure&sector=4`). Clear 10 handcrafted sectors—each introducing a distinct telemetry twist from gravity bends and decay rushes to twin sentinel patrols—reach the Extraction Goal, and master all 3 stars per sector (Extraction Clear, Shard Target, and Max Combo) with progress saved in `localStorage`.
-- **1-Tap Shareable Results:** Copy or natively share formatted telemetry summaries (stars, sector progress, score, max combo, and deep link) directly from Victory and Game Over screens.
+- **Live Gravity Trajectory Preview:** Aiming engages subtle slow-motion and predicts the exact curved flight path using the same fixed-timestep integrator as live physics—highlighting locked anchor captures, `-G` repulsor bends, shield deflections, and hazard warnings.
+- **Decay Tension & Patrol Drones:** Higher-altitude anchors begin decaying the moment you enter orbit, while lateral drift and orbiting hazard drones demand clean timing.
+- **Repulsor (`-G`) Wells:** Anti-gravity nodes bend flight arcs outward so you can bank around obstacles—stay clear of their coral cores.
+- **Rotating Shield Arcs:** Coral deflector arcs orbit anchor capture rings and bounce off-angle shots; thread the open cyan gap to capture.
+- **Overdrive Boost Anchors:** Supercharged gold anchors amplify launch velocity to vault across wide deep-space gaps.
+- **Combo Multiplier, Anchor Skips & Energy Shards:** Chain consecutive new-anchor captures to build your combo (`x2`, `x3`, …), skip anchors for bonus points, and curve through floating shards.
+- **Adventure Mode (5 Chapters · 50 Sectors & 150-Star Mastery):** Switch between **Endless** and **Adventure** on the start screen (deep-linkable via `?mode=adventure` or `?mode=adventure&sector=14`). Browse all 5 chapters (**01 Low Orbit**, **02 Repulsor Field**, **03 Aegis Array**, **04 Overdrive Relay**, and **05 Event Horizon**—the full-system mastery remix) with the compact chapter pager, reach each sector's Extraction Goal, and collect up to **150 stars** (3 per sector: Extraction Clear, Shard Target, and Max Combo) with progress saved in `localStorage`.
+- **1-Tap Shareable Results:** Copy or natively share formatted telemetry summaries (chapter, sector, stars, score, max combo, and deep link) directly from Victory and Game Over screens.
 
 ## Controls
 
@@ -24,7 +25,7 @@ Drag anywhere to pull back, watch gravity bend your live trajectory preview thro
 | **Tap outside card** (Game Over) | Quick restart |
 | **`R`** | Instant restart |
 | **`M`** | Toggle sound mute (persisted in `localStorage`) |
-| **`Space` / `Enter`** (Victory / Game Over) | Next sector on Victory (or replay finale) / quick restart on Game Over |
+| **`Space` / `Enter`** (Victory / Game Over) | Next sector/chapter on Victory (Play Endless after Sector 50) / quick restart on Game Over |
 | **`Esc`** | Cancel active aim |
 
 ## Tech Stack

@@ -8,6 +8,8 @@ import {
   PHYSICS,
   Particle,
   Probe,
+  RepulsorNode,
+  ShieldArc,
   Shockwave,
   Star,
   ViewportMetrics,
@@ -166,6 +168,13 @@ export class GameRenderer {
       state.probe.mode === 'orbiting' ? state.probe.anchorId : null;
     const lockedAnchorId =
       canShowAim && state.aim.active && state.aim.valid ? state.aim.lockedAnchorId : null;
+
+    // Repulsor wells (-G anti-gravity fields)
+    for (let i = 0; i < state.repulsors.length; i++) {
+      const repulsor = state.repulsors[i];
+      if (!this.isRepulsorVisible(repulsor, state.camera, vp)) continue;
+      this.drawRepulsor(ctx, repulsor, state.camera, vp, state.elapsed);
+    }
 
     // Anchors & orbiting hazard drones
     for (let i = 0; i < state.anchors.length; i++) {
@@ -468,6 +477,252 @@ export class GameRenderer {
     }
   }
 
+  private isRepulsorVisible(
+    repulsor: RepulsorNode,
+    camera: CameraState,
+    vp: ViewportMetrics
+  ): boolean {
+    const pos = worldToScreen(repulsor.x, repulsor.y, camera, vp);
+    const margin = Math.max(repulsor.range + 24, repulsor.coreRadius + 30) * vp.viewScale;
+    return (
+      pos.x >= -margin &&
+      pos.x <= vp.width + margin &&
+      pos.y >= -margin &&
+      pos.y <= vp.height + margin
+    );
+  }
+
+  private drawRepulsor(
+    ctx: CanvasRenderingContext2D,
+    repulsor: RepulsorNode,
+    camera: CameraState,
+    vp: ViewportMetrics,
+    elapsed: number
+  ): void {
+    const scale = vp.viewScale;
+    const pos = worldToScreen(repulsor.x, repulsor.y, camera, vp);
+    const coreR = Math.max(6, repulsor.coreRadius * scale);
+    const rangeR = Math.max(coreR + 2, repulsor.range * scale);
+
+    ctx.save();
+
+    // 1. Repulsive field aura (coral-crimson radial gradient)
+    const fieldGrad = ctx.createRadialGradient(pos.x, pos.y, coreR * 0.5, pos.x, pos.y, rangeR);
+    fieldGrad.addColorStop(0, 'rgba(244, 63, 94, 0.12)');
+    fieldGrad.addColorStop(0.55, 'rgba(244, 63, 94, 0.048)');
+    fieldGrad.addColorStop(1, 'rgba(244, 63, 94, 0)');
+    ctx.fillStyle = fieldGrad;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, rangeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. Two staggered outward-expanding telemetry pulse rings (core -> range)
+    for (let p = 0; p < 2; p++) {
+      const phase = mod(elapsed * 0.7 + repulsor.pulsePhase + p * 0.5, 1);
+      const pulseR = lerp(coreR * 1.15, rangeR, phase);
+      const fadeIn = clamp(phase / 0.14, 0, 1);
+      const fadeOut = 1 - phase;
+      const alpha = fadeIn * fadeOut * 0.44;
+      if (alpha <= 0.008) continue;
+
+      const dashLen = Math.max(4, pulseR * 0.15);
+      const gapLen = Math.max(3.5, pulseR * 0.1);
+      ctx.strokeStyle = `rgba(244, 63, 94, ${alpha.toFixed(3)})`;
+      ctx.lineWidth = lerp(1.35, 0.85, phase);
+      ctx.setLineDash([dashLen, gapLen]);
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, pulseR, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // 3. Faint dotted outer boundary ring at repulsor.range
+    ctx.strokeStyle = 'rgba(244, 63, 94, 0.18)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2.5, 5.5]);
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, rangeR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Subtle outward cardinal telemetry ticks on boundary
+    ctx.strokeStyle = 'rgba(244, 63, 94, 0.24)';
+    ctx.lineWidth = 1;
+    const tickLen = Math.max(3, 4 * scale);
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y - rangeR);
+    ctx.lineTo(pos.x, pos.y - rangeR - tickLen);
+    ctx.moveTo(pos.x + rangeR, pos.y);
+    ctx.lineTo(pos.x + rangeR + tickLen, pos.y);
+    ctx.moveTo(pos.x, pos.y + rangeR);
+    ctx.lineTo(pos.x, pos.y + rangeR + tickLen);
+    ctx.moveTo(pos.x - rangeR, pos.y);
+    ctx.lineTo(pos.x - rangeR - tickLen, pos.y);
+    ctx.stroke();
+
+    // 4. Subtle pulsing inner halo around repulsor core
+    const corePulse = 0.5 + 0.5 * Math.sin(elapsed * 3.8 + repulsor.pulsePhase);
+    const innerHaloR = coreR * (2.05 + corePulse * 0.25);
+    const haloGrad = ctx.createRadialGradient(pos.x, pos.y, coreR * 0.6, pos.x, pos.y, innerHaloR);
+    haloGrad.addColorStop(0, `rgba(244, 63, 94, ${(0.24 + corePulse * 0.12).toFixed(3)})`);
+    haloGrad.addColorStop(1, 'rgba(244, 63, 94, 0)');
+    ctx.fillStyle = haloGrad;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, innerHaloR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 5. Repulsor core disc (obsidian slate-crimson + coral ring + -G label)
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, coreR, 0, Math.PI * 2);
+    ctx.fillStyle = '#160F1D';
+    ctx.fill();
+    ctx.strokeStyle = PALETTE.coral;
+    ctx.lineWidth = 1.75;
+    ctx.stroke();
+
+    if (coreR >= 8) {
+      ctx.strokeStyle = `rgba(251, 113, 133, ${(0.22 + corePulse * 0.18).toFixed(3)})`;
+      ctx.lineWidth = 0.85;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, coreR * 0.74, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = PALETTE.coralSoft;
+    if (coreR >= 9.5) {
+      const fontSize = Math.max(8, Math.round(coreR * 0.6));
+      ctx.font = `700 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
+      ctx.fillText('\u2212G', pos.x, pos.y + 0.5);
+    } else {
+      const fontSize = Math.max(8, Math.round(coreR * 0.88));
+      ctx.font = `700 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
+      ctx.fillText('\u2212', pos.x, pos.y + 0.5);
+    }
+
+    ctx.restore();
+  }
+
+  private drawShieldArc(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    captureR: number,
+    shield: ShieldArc,
+    deflectPulse: number,
+    scale: number
+  ): void {
+    const halfSpan = shield.arcSpan * 0.5;
+    const startAngle = shield.angle - halfSpan;
+    const endAngle = shield.angle + halfSpan;
+    const pulse = clamp(deflectPulse, 0, 1);
+    const outerR = captureR + 1.5;
+    const innerR = Math.max(4, captureR - 3);
+    const s = Math.max(0.75, scale);
+
+    ctx.save();
+    ctx.setLineDash([]);
+
+    // Brief bright flash halo on shield deflection
+    if (pulse > 0.005) {
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = `rgba(251, 113, 133, ${(pulse * 0.45).toFixed(3)})`;
+      ctx.lineWidth = (9 + pulse * 6) * s;
+      ctx.beginPath();
+      ctx.arc(x, y, outerR, startAngle, endAngle);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(255, 255, 255, ${(pulse * 0.58).toFixed(3)})`;
+      ctx.lineWidth = (4.2 + pulse * 2.4) * s;
+      ctx.beginPath();
+      ctx.arc(x, y, outerR, startAngle, endAngle);
+      ctx.stroke();
+    }
+
+    // Steady soft coral glow behind the armor arc for high contrast on mobile
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgba(244, 63, 94, ${(0.24 + pulse * 0.22).toFixed(3)})`;
+    ctx.lineWidth = Math.max(5.5, 6.5 * s);
+    ctx.beginPath();
+    ctx.arc(x, y, outerR, startAngle, endAngle);
+    ctx.stroke();
+
+    // Secondary inner telemetry rail at captureR - 3
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle =
+      pulse > 0.05
+        ? `rgba(251, 113, 133, ${(0.45 + pulse * 0.48).toFixed(3)})`
+        : 'rgba(244, 63, 94, 0.45)';
+    ctx.lineWidth = Math.max(1.1, 1.3 * s);
+    ctx.beginPath();
+    ctx.arc(x, y, innerR, startAngle, endAngle);
+    ctx.stroke();
+
+    // End-cap bulkhead connectors framing the blocked vs open capture zone
+    const endAngles = [startAngle, endAngle];
+    ctx.strokeStyle = pulse > 0.1 ? '#FFF1F2' : PALETTE.coralSoft;
+    ctx.lineWidth = Math.max(1.3, 1.5 * s);
+    ctx.beginPath();
+    for (let i = 0; i < endAngles.length; i++) {
+      const a = endAngles[i];
+      const cosA = Math.cos(a);
+      const sinA = Math.sin(a);
+      ctx.moveTo(x + cosA * (innerR - 0.5), y + sinA * (innerR - 0.5));
+      ctx.lineTo(x + cosA * (outerR + 1.8), y + sinA * (outerR + 1.8));
+    }
+    ctx.stroke();
+
+    // Primary bold razor-sharp coral deflector arc (brightening toward white/coralSoft on deflect)
+    const arcR = Math.round(lerp(244, 255, pulse * 0.88));
+    const arcG = Math.round(lerp(63, 236, pulse * 0.88));
+    const arcB = Math.round(lerp(94, 242, pulse * 0.88));
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgb(${arcR}, ${arcG}, ${arcB})`;
+    ctx.lineWidth = Math.max(2.6, 3.1 * s) + pulse * 1.1;
+    ctx.beginPath();
+    ctx.arc(x, y, outerR, startAngle, endAngle);
+    ctx.stroke();
+
+    // Crisp inner specular highlight thread along the armor face
+    ctx.strokeStyle = `rgba(255, 241, 242, ${(0.42 + pulse * 0.55).toFixed(3)})`;
+    ctx.lineWidth = Math.max(0.85, 1.0 * s);
+    ctx.beginPath();
+    ctx.arc(x, y, outerR, startAngle, endAngle);
+    ctx.stroke();
+
+    // Tiny outward armor chevron/tick marks along the shield arc
+    const tickCount = Math.max(3, Math.round(shield.arcSpan / 0.42));
+    const pad = Math.min(0.18, shield.arcSpan * 0.16);
+    const usableSpan = Math.max(0.01, shield.arcSpan - pad * 2);
+    const chevronBaseR = outerR + 2.1;
+    const chevronTipR = outerR + Math.max(4.8, 5.4 * s);
+    const wingSpread = Math.max(0.045, 3.0 / Math.max(24, outerR));
+
+    ctx.strokeStyle = pulse > 0.15 ? '#FFFFFF' : PALETTE.coralSoft;
+    ctx.lineWidth = Math.max(1.0, 1.15 * s);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < tickCount; i++) {
+      const frac = tickCount > 1 ? i / (tickCount - 1) : 0.5;
+      const a = startAngle + pad + usableSpan * frac;
+      const tipX = x + Math.cos(a) * chevronTipR;
+      const tipY = y + Math.sin(a) * chevronTipR;
+      const leftX = x + Math.cos(a - wingSpread) * chevronBaseR;
+      const leftY = y + Math.sin(a - wingSpread) * chevronBaseR;
+      const rightX = x + Math.cos(a + wingSpread) * chevronBaseR;
+      const rightY = y + Math.sin(a + wingSpread) * chevronBaseR;
+      ctx.moveTo(leftX, leftY);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(rightX, rightY);
+    }
+    ctx.stroke();
+
+    ctx.lineCap = 'butt';
+    ctx.restore();
+  }
+
   private drawAnchor(
     ctx: CanvasRenderingContext2D,
     anchor: Anchor,
@@ -484,6 +739,7 @@ export class GameRenderer {
     const orbitR = anchor.orbitRadius * scale;
     const coreR = Math.max(5.5, anchor.coreRadius * scale);
     const isGoal = anchor.isGoal;
+    const isBoost = !isGoal && anchor.boostMultiplier > 1.05;
     const auraR = isGoal
       ? Math.max(captureR * 1.56, anchor.gravityRange * 0.8 * scale)
       : Math.max(captureR * 1.38, anchor.gravityRange * 0.72 * scale);
@@ -524,7 +780,7 @@ export class GameRenderer {
       ctx.stroke();
     }
 
-    // 2. Faint gravity well aura (or warm gold Extraction Beacon aura)
+    // 2. Faint gravity well aura (warm gold for Goal, cyan-gold for Boost, or cyan/decay)
     const auraGrad = ctx.createRadialGradient(pos.x, pos.y, coreR * 0.6, pos.x, pos.y, auraR);
     if (isGoal) {
       const beaconPulse = 0.5 + 0.5 * Math.sin(elapsed * 2.4);
@@ -546,6 +802,13 @@ export class GameRenderer {
         auraGrad.addColorStop(0, `rgba(${c.r}, ${c.g}, ${c.b}, ${(auraAlpha * 1.4).toFixed(3)})`);
         auraGrad.addColorStop(0.52, `rgba(${c.r}, ${c.g}, ${c.b}, ${(auraAlpha * 0.45).toFixed(3)})`);
         auraGrad.addColorStop(1, `rgba(${c.r}, ${c.g}, ${c.b}, 0)`);
+      } else if (isBoost) {
+        const boostPulse = 0.5 + 0.5 * Math.sin(elapsed * 3.4);
+        const boostAlpha = (isLocked ? 0.17 : isCurrent ? 0.135 : 0.1) + boostPulse * 0.025;
+        auraGrad.addColorStop(0, `rgba(245, 184, 65, ${(boostAlpha * 0.85).toFixed(3)})`);
+        auraGrad.addColorStop(0.38, `rgba(56, 189, 248, ${(boostAlpha * 0.95).toFixed(3)})`);
+        auraGrad.addColorStop(0.72, `rgba(56, 189, 248, ${(boostAlpha * 0.3).toFixed(3)})`);
+        auraGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
       } else {
         auraGrad.addColorStop(0, `rgba(56, 189, 248, ${(auraAlpha * 1.25).toFixed(3)})`);
         auraGrad.addColorStop(0.55, `rgba(56, 189, 248, ${(auraAlpha * 0.42).toFixed(3)})`);
@@ -562,7 +825,7 @@ export class GameRenderer {
       const pulse = clamp(anchor.capturePulse, 0, 1);
       const expandProgress = 1 - pulse;
       const pulseR = lerp(orbitR, captureR * 1.32, 1 - Math.pow(1 - expandProgress, 2));
-      ctx.strokeStyle = isGoal
+      ctx.strokeStyle = isGoal || isBoost
         ? `rgba(252, 211, 77, ${(pulse * 0.82).toFixed(3)})`
         : `rgba(125, 211, 252, ${(pulse * 0.72).toFixed(3)})`;
       ctx.lineWidth = 1.2 + pulse * 1.8;
@@ -628,11 +891,17 @@ export class GameRenderer {
       ctx.strokeStyle = isLocked
         ? 'rgba(56, 189, 248, 0.88)'
         : isCurrent
-          ? 'rgba(56, 189, 248, 0.42)'
+          ? isBoost
+            ? 'rgba(56, 189, 248, 0.62)'
+            : 'rgba(56, 189, 248, 0.42)'
           : anchor.visited
-            ? 'rgba(148, 163, 184, 0.22)'
-            : 'rgba(56, 189, 248, 0.32)';
-      ctx.lineWidth = isLocked ? 1.8 : 1.15;
+            ? isBoost
+              ? 'rgba(56, 189, 248, 0.32)'
+              : 'rgba(148, 163, 184, 0.22)'
+            : isBoost
+              ? 'rgba(56, 189, 248, 0.48)'
+              : 'rgba(56, 189, 248, 0.32)';
+      ctx.lineWidth = isLocked ? 1.8 : isBoost ? 1.35 : 1.15;
       const dashLen = Math.max(5, captureR * 0.16);
       const gapLen = Math.max(4, captureR * 0.11);
       ctx.setLineDash([dashLen, gapLen]);
@@ -643,10 +912,23 @@ export class GameRenderer {
       ctx.restore();
     }
 
+    // 4b. Rotating coral deflector shield arc on capture ring
+    if (anchor.shield !== null) {
+      this.drawShieldArc(
+        ctx,
+        pos.x,
+        pos.y,
+        captureR,
+        anchor.shield,
+        anchor.deflectPulse,
+        scale
+      );
+    }
+
     // 5. Lock-on corner brackets / ticks around capture ring
     if (isLocked) {
       const breathe = Math.sin(elapsed * 9) * 2.2;
-      const bracketR = captureR + 6 + breathe;
+      const bracketR = captureR + (anchor.shield !== null ? 9 : 6) + breathe;
       const arcSpan = 0.22;
       ctx.strokeStyle = isGoal ? PALETTE.goldSoft : PALETTE.cyanSoft;
       ctx.lineWidth = isGoal ? 2.0 : 1.8;
@@ -669,7 +951,7 @@ export class GameRenderer {
       ctx.lineCap = 'butt';
     }
 
-    // 6. Subtle orbit track circle
+    // 6. Subtle orbit track circle (+ Overdrive Boost energy segments & rotating outward chevrons)
     if (isGoal) {
       ctx.strokeStyle = isVictory
         ? 'rgba(252, 211, 77, 0.62)'
@@ -677,6 +959,11 @@ export class GameRenderer {
           ? 'rgba(245, 184, 65, 0.54)'
           : 'rgba(245, 184, 65, 0.34)';
       ctx.lineWidth = isVictory || isCurrent ? 1.45 : 1.1;
+    } else if (isBoost) {
+      ctx.strokeStyle = isCurrent || isLocked
+        ? 'rgba(56, 189, 248, 0.48)'
+        : 'rgba(56, 189, 248, 0.3)';
+      ctx.lineWidth = isCurrent ? 1.45 : 1.15;
     } else {
       ctx.strokeStyle = isCurrent
         ? 'rgba(125, 211, 252, 0.36)'
@@ -688,6 +975,56 @@ export class GameRenderer {
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, orbitR, 0, Math.PI * 2);
     ctx.stroke();
+
+    if (isBoost) {
+      const boostRot = elapsed * 0.7;
+      const segStep = (Math.PI * 2) / 3;
+      const segSpan = 0.42;
+
+      // Rotating cyan/gold supercharged energy track arcs on orbitRadius
+      ctx.save();
+      ctx.translate(pos.x, pos.y);
+      ctx.rotate(boostRot);
+
+      ctx.strokeStyle =
+        isCurrent || isLocked
+          ? 'rgba(252, 211, 77, 0.78)'
+          : 'rgba(245, 184, 65, 0.58)';
+      ctx.lineWidth = isCurrent || isLocked ? 2.0 : 1.55;
+      ctx.lineCap = 'round';
+      for (let b = 0; b < 3; b++) {
+        const a0 = b * segStep - segSpan * 0.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, orbitR, a0, a0 + segSpan);
+        ctx.stroke();
+      }
+
+      // 3 crisp outward chevron arrows rotating gently around orbitRadius
+      const chevSize = Math.max(3.6, 4.4 * scale);
+      const chevBaseR = orbitR + Math.max(2.5, 3.2 * scale);
+      const chevTipR = chevBaseR + chevSize;
+      const wingAngle = chevSize / Math.max(18, orbitR);
+
+      ctx.strokeStyle = isCurrent || isLocked ? PALETTE.goldSoft : PALETTE.gold;
+      ctx.lineWidth = Math.max(1.25, 1.45 * scale);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let b = 0; b < 3; b++) {
+        const midA = b * segStep;
+        const tipX = Math.cos(midA) * chevTipR;
+        const tipY = Math.sin(midA) * chevTipR;
+        const lX = Math.cos(midA - wingAngle) * chevBaseR;
+        const lY = Math.sin(midA - wingAngle) * chevBaseR;
+        const rX = Math.cos(midA + wingAngle) * chevBaseR;
+        const rY = Math.sin(midA + wingAngle) * chevBaseR;
+        ctx.moveTo(lX, lY);
+        ctx.lineTo(tipX, tipY);
+        ctx.lineTo(rX, rY);
+      }
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      ctx.restore();
+    }
 
     // 7. Decay ring (active or subtle preview if armed on unvisited anchor)
     if (anchor.hasDecay) {
@@ -865,6 +1202,57 @@ export class GameRenderer {
         'rgba(7, 11, 19, 0.88)',
         2.8
       );
+    } else if (isBoost) {
+      const corePulse = 0.5 + 0.5 * Math.sin(elapsed * 4.8);
+
+      // Subtle pulsing electric cyan outer ring around the core
+      ctx.strokeStyle = `rgba(56, 189, 248, ${(0.45 + corePulse * 0.35).toFixed(3)})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, coreR + 2.6 + corePulse * 1.1, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Core disc with bright cyan outer border
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, coreR, 0, Math.PI * 2);
+      ctx.fillStyle = '#0F1B2E';
+      ctx.fill();
+
+      ctx.strokeStyle = isLocked || isCurrent ? PALETTE.cyanSoft : PALETTE.cyan;
+      ctx.lineWidth = isLocked || isCurrent ? 2.0 : 1.75;
+      ctx.stroke();
+
+      // Pulsing warm gold inner ring
+      if (coreR >= 7.5) {
+        ctx.strokeStyle = `rgba(245, 184, 65, ${(0.58 + corePulse * 0.32).toFixed(3)})`;
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, coreR * 0.78, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Precision monospace boost indicator (1.3x on larger cores, » on compact mobile cores)
+      if (coreR >= 12.5) {
+        const boostLabel = `${anchor.boostMultiplier.toFixed(1)}x`;
+        const fontSize = Math.max(8, Math.round(coreR * 0.46));
+        ctx.font = `700 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = PALETTE.goldSoft;
+        ctx.fillText(boostLabel, pos.x, pos.y + 0.5);
+      } else if (coreR >= 9.5) {
+        const fontSize = Math.max(10, Math.round(coreR * 0.88));
+        ctx.font = `700 ${fontSize}px ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = PALETTE.goldSoft;
+        ctx.fillText('\u00BB', pos.x, pos.y + 0.5);
+      } else {
+        ctx.fillStyle = PALETTE.goldSoft;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, Math.max(2.2, coreR * 0.28), 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else {
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, coreR, 0, Math.PI * 2);
@@ -985,9 +1373,12 @@ export class GameRenderer {
     state: GameState,
     vp: ViewportMetrics
   ): void {
-    const { trajectory, hitsHazard, lockedAnchorId } = state.aim;
+    const { trajectory, hitsHazard, lockedAnchorId, deflectsOffShield } = state.aim;
     const count = trajectory.length;
     if (count === 0) return;
+
+    const isShieldRicochetLock = !hitsHazard && deflectsOffShield && lockedAnchorId !== null;
+    const isShieldDeflectMiss = !hitsHazard && deflectsOffShield && lockedAnchorId === null;
 
     ctx.save();
 
@@ -1013,6 +1404,17 @@ export class GameRenderer {
         r = Math.round(lerp(56, 244, hazardBlend));
         g = Math.round(lerp(189, 63, hazardBlend));
         b = Math.round(lerp(248, 94, hazardBlend));
+      } else if (isShieldDeflectMiss) {
+        // Warm amber (#F5B841) -> coral-rose (#FB7185) warning for uncaptured shield bounce
+        r = Math.round(lerp(245, 251, t));
+        g = Math.round(lerp(184, 113, t));
+        b = Math.round(lerp(65, 133, t));
+      } else if (isShieldRicochetLock) {
+        // Electric cyan (#38BDF8) -> crisp gold (#FCD34D) bank-shot ricochet lock
+        const bankBlend = clamp((t - 0.15) / 0.48, 0, 1);
+        r = Math.round(lerp(56, 252, bankBlend));
+        g = Math.round(lerp(189, 211, bankBlend));
+        b = Math.round(lerp(248, 77, bankBlend));
       }
 
       ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
@@ -1021,7 +1423,7 @@ export class GameRenderer {
       ctx.fill();
     }
 
-    // End marker: target reticle on lock-on, or warning cross on hazard hit
+    // End marker: warning cross on hazard hit, reticle on lock-on (or ricochet bank-shot lock)
     if (hitsHazard) {
       const arm = 5.5;
       ctx.strokeStyle = PALETTE.coral;
@@ -1038,7 +1440,18 @@ export class GameRenderer {
         (anchor) => anchor.id === lockedAnchorId && anchor.isGoal
       );
       const reticleR = 7;
-      ctx.strokeStyle = lockedIsGoal ? PALETTE.goldSoft : PALETTE.cyanSoft;
+
+      // Extra outer cyan halo ring on a shield-deflected bank-shot lock
+      if (isShieldRicochetLock) {
+        ctx.strokeStyle = PALETTE.cyan;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, reticleR + 3.2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle =
+        lockedIsGoal || isShieldRicochetLock ? PALETTE.goldSoft : PALETTE.cyanSoft;
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(lastX, lastY, reticleR, 0, Math.PI * 2);
