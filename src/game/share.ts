@@ -10,11 +10,29 @@ const TRACE_GLYPHS: Record<RunTraceStep, string> = {
   crash: '💥',
 };
 
+const PUBLIC_GAME_ORIGIN = 'https://orbit-sling-gamma.vercel.app';
+
 export type ShareOutcome = 'shared' | 'copied' | 'cancelled' | 'failed';
+
+function resolveShareOrigin(): string {
+  try {
+    const loc = window.location;
+    // Inside Capacitor native APK, WebView serves from https://localhost — share the public Vercel URL instead
+    const isCapacitorNative =
+      loc.protocol === 'capacitor:' ||
+      (loc.hostname === 'localhost' && loc.port === '');
+    if (isCapacitorNative || !loc.origin || loc.origin === 'null') {
+      return PUBLIC_GAME_ORIGIN;
+    }
+    return loc.origin;
+  } catch {
+    return PUBLIC_GAME_ORIGIN;
+  }
+}
 
 export function buildShareUrl(mode: GameMode, sectorId: number, beatScore: number): string {
   try {
-    const url = new URL(window.location.href);
+    const url = new URL(`${resolveShareOrigin()}/`);
     url.hash = '';
     url.searchParams.delete('unlock');
     if (mode === 'adventure') {
@@ -388,7 +406,7 @@ export async function renderScoreCardBlob(state: GameState): Promise<Blob | null
 
   let hostLabel = 'ORBIT SLING';
   try {
-    hostLabel = window.location.host || 'ORBIT SLING';
+    hostLabel = new URL(resolveShareOrigin()).host || 'ORBIT SLING';
   } catch {
     hostLabel = 'ORBIT SLING';
   }

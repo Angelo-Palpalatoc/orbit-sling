@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Orbit Sling</string>
+    <string name="title_activity_main">Orbit Sling</string>
+    <string name="package_name">com.angelopalpalatoc.orbitsling</string>
+    <string name="custom_url_scheme">com.angelopalpalatoc.orbitsling</string>
+</resources>

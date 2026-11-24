@@ -2,6 +2,14 @@
 node_modules/
 dist/
 
+# Android / Capacitor generated build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+
 # Vercel
 .vercel/
 

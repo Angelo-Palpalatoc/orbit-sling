@@ -1109,7 +1109,11 @@ function bootstrap(): void {
 
 bootstrap();
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+const isNativeCapacitor =
+  window.location.protocol === 'capacitor:' ||
+  (window.location.hostname === 'localhost' && window.location.port === '');
+
+if (import.meta.env.PROD && !isNativeCapacitor && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('/sw.js').catch(() => {
       // Non-fatal if service worker registration is restricted
