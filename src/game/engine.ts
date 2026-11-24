@@ -263,20 +263,24 @@ export class GameEngine {
   private readonly previewAnchorX: number[] = [];
   private endlessBestScore = 0;
   private adventureProgress: Record<number, SectorProgress>;
+  private readonly unlockAllSectors: boolean;
   private levelRng: () => number = Math.random;
 
   constructor(
     onEvent?: (event: GameEvent) => void,
     initialMode: GameMode = 'endless',
-    initialSectorId?: number
+    initialSectorId?: number,
+    unlockAllSectors = false
   ) {
     this.onEvent = onEvent;
+    this.unlockAllSectors = unlockAllSectors;
     this.adventureProgress = loadAdventureProgress();
     const highestUnlocked = this.getHighestUnlockedSectorId();
+    const defaultSectorId = unlockAllSectors ? 1 : highestUnlocked;
     const resolvedSectorId =
       initialSectorId !== undefined
         ? clamp(Math.floor(initialSectorId), 1, highestUnlocked)
-        : highestUnlocked;
+        : defaultSectorId;
     this.endlessBestScore = loadBestScore(BEST_SCORE_STORAGE_KEY);
     const initialBest =
       initialMode === 'adventure'
@@ -347,7 +351,9 @@ export class GameEngine {
   }
 
   getHighestUnlockedSectorId(): number {
-    return getHighestUnlockedSectorId(this.adventureProgress);
+    return this.unlockAllSectors
+      ? ADVENTURE_SECTORS.length
+      : getHighestUnlockedSectorId(this.adventureProgress);
   }
 
   private createBlankState(
@@ -382,6 +388,7 @@ export class GameEngine {
       maxCombo: 0,
       anchorsCaptured: 0,
       shardsCollected: 0,
+      runTrace: [],
       adventureSectorId,
       adventureTotalAnchors: 0,
       adventureCurrentAnchorIndex: 0,
@@ -451,6 +458,7 @@ export class GameEngine {
     this.state.anchors.length = 0;
     this.state.repulsors.length = 0;
     this.state.shards.length = 0;
+    this.state.runTrace.length = 0;
     this.state.particles.length = 0;
     this.state.shockwaves.length = 0;
     this.state.floatingTexts.length = 0;
@@ -867,6 +875,9 @@ export class GameEngine {
           probe.vx = probeVel.x;
           probe.vy = probeVel.y;
           capturedAnchor.deflectPulse = 1.0;
+          if (this.state.runTrace.length < 64) {
+            this.state.runTrace.push('deflect');
+          }
           this.addCameraShake(4.0);
           this.spawnBurstParticles(
             probe.x,
@@ -1009,6 +1020,17 @@ export class GameEngine {
       }
 
       this.state.anchorsCaptured += 1;
+      if (this.state.runTrace.length < 64) {
+        this.state.runTrace.push(
+          anchor.isGoal
+            ? 'goal'
+            : skipped > 0
+              ? 'skip'
+              : anchor.boostMultiplier > 1.05
+                ? 'boost'
+                : 'capture'
+        );
+      }
       this.state.combo += 1 + skipped;
       this.state.maxCombo = Math.max(this.state.maxCombo, this.state.combo);
 
@@ -1137,6 +1159,9 @@ export class GameEngine {
 
     this.state.status = 'gameover';
     this.state.probe.mode = 'crashed';
+    if (this.state.runTrace.length < 64) {
+      this.state.runTrace.push('crash');
+    }
     this.state.gameOverReason = reason;
     this.state.gameOverElapsed = 0;
     this.state.hitStopRemaining = TUNING.CRASH_HIT_STOP;

@@ -15,6 +15,8 @@ export type GameOverReason =
   | 'DRONE_COLLISION'
   | 'REPULSOR_IMPACT';
 
+export type RunTraceStep = 'capture' | 'skip' | 'boost' | 'deflect' | 'goal' | 'crash';
+
 export interface ShieldArc {
   /** Center angle of the deflecting coral shield arc (radians) */
   angle: number;
@@ -288,6 +290,7 @@ export interface GameState {
   maxCombo: number;
   anchorsCaptured: number;
   shardsCollected: number;
+  runTrace: RunTraceStep[];
   adventureSectorId: number;
   adventureTotalAnchors: number;
   adventureCurrentAnchorIndex: number;

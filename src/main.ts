@@ -12,6 +12,16 @@ import {
   getTotalMaxAdventureStars,
 } from './game/levels';
 import { GameRenderer } from './game/renderer';
+import {
+  buildFacebookShareUrl,
+  buildShareText,
+  buildShareUrl,
+  buildXShareUrl,
+  copyTextToClipboard,
+  downloadScoreCard,
+  renderScoreCardBlob,
+  shareForInstagram,
+} from './game/share';
 import type { GameMode, GameOverReason, GameState, GameStatus } from './game/types';
 
 const GAME_OVER_COPY: Record<GameOverReason, string> = {
@@ -27,24 +37,40 @@ const SECTORS_PER_PAGE = 10;
 interface InitialRoute {
   mode: GameMode;
   sectorId?: number;
+  unlockAll: boolean;
+  beatScore: number | null;
 }
 
 function readInitialRouteFromUrl(): InitialRoute {
   try {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'adventure') {
-      const sectorRaw = params.get('sector');
-      if (sectorRaw !== null) {
-        const parsed = Number.parseInt(sectorRaw, 10);
-        if (Number.isFinite(parsed) && parsed >= 1) {
-          return { mode: 'adventure', sectorId: parsed };
-        }
+    const unlockRaw = import.meta.env.DEV ? params.get('unlock')?.toLowerCase() : undefined;
+    const unlockAll =
+      import.meta.env.DEV &&
+      (unlockRaw === '1' || unlockRaw === 'true' || unlockRaw === 'all');
+    const sectorRaw = params.get('sector');
+    let parsedSector: number | undefined;
+    if (sectorRaw !== null) {
+      const parsed = Number.parseInt(sectorRaw, 10);
+      if (Number.isFinite(parsed) && parsed >= 1) {
+        parsedSector = parsed;
       }
-      return { mode: 'adventure' };
     }
-    return { mode: 'endless' };
+    const beatRaw = params.get('beat');
+    let beatScore: number | null = null;
+    if (beatRaw !== null) {
+      const parsedBeat = Number.parseInt(beatRaw, 10);
+      if (Number.isFinite(parsedBeat) && parsedBeat > 0 && parsedBeat <= 99999) {
+        beatScore = parsedBeat;
+      }
+    }
+
+    if (params.get('mode') === 'adventure' || parsedSector !== undefined) {
+      return { mode: 'adventure', sectorId: parsedSector, unlockAll, beatScore };
+    }
+    return { mode: 'endless', unlockAll, beatScore };
   } catch {
-    return { mode: 'endless' };
+    return { mode: 'endless', unlockAll: false, beatScore: null };
   }
 }
 
@@ -61,81 +87,6 @@ function syncRouteToUrl(mode: GameMode, sectorId: number): void {
     window.history.replaceState(null, '', url.toString());
   } catch {
     // Ignore history API restrictions in sandboxed iframes
-  }
-}
-
-function buildShareUrl(mode: GameMode, sectorId: number): string {
-  try {
-    const url = new URL(window.location.href);
-    url.hash = '';
-    if (mode === 'adventure') {
-      url.searchParams.set('mode', 'adventure');
-      url.searchParams.set('sector', String(sectorId));
-    } else {
-      url.searchParams.delete('mode');
-      url.searchParams.delete('sector');
-    }
-    return url.toString();
-  } catch {
-    return '';
-  }
-}
-
-function buildShareText(state: GameState): string {
-  if (state.mode === 'adventure') {
-    const sector = getSectorById(state.adventureSectorId);
-    const chapter = getChapterById(sector.chapterId);
-    const shareUrl = buildShareUrl('adventure', sector.id);
-
-    if (state.status === 'victory' && state.adventureSummary) {
-      const summary = state.adventureSummary;
-      const earned = Math.max(0, Math.min(3, summary.starsEarned));
-      const starsStr = `${'★'.repeat(earned)}${'☆'.repeat(3 - earned)}`;
-      const header = `ORBIT SLING · CH ${chapter.code} · SECTOR ${summary.sectorCode} ${summary.sectorName}`;
-      const stats = `${starsStr} · Score ${state.score} · Max x${Math.max(1, summary.maxCombo)} · ${summary.shardsCollected}/${summary.totalShards} shards`;
-      return shareUrl ? `${header}\n${stats}\n${shareUrl}` : `${header}\n${stats}`;
-    }
-
-    const current = Math.max(0, state.adventureCurrentAnchorIndex);
-    const total = Math.max(1, state.adventureTotalAnchors);
-    const header = `ORBIT SLING · CH ${chapter.code} · SECTOR ${sector.code} ${sector.name}`;
-    const stats = `Reached ${current}/${total} · Score ${state.score} · Max x${Math.max(1, state.maxCombo)}`;
-    return shareUrl ? `${header}\n${stats}\n${shareUrl}` : `${header}\n${stats}`;
-  }
-
-  const header = 'ORBIT SLING · ENDLESS';
-  const orbitsLabel = state.anchorsCaptured === 1 ? '1 orbit' : `${state.anchorsCaptured} orbits`;
-  const shardsLabel = state.shardsCollected === 1 ? '1 shard' : `${state.shardsCollected} shards`;
-  const stats = `Score ${state.score} · Max x${Math.max(1, state.maxCombo)} · ${orbitsLabel} · ${shardsLabel}`;
-  const shareUrl = buildShareUrl('endless', 1);
-
-  return shareUrl ? `${header}\n${stats}\n${shareUrl}` : `${header}\n${stats}`;
-}
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Fall through to legacy textarea copy
-    }
-  }
-
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    ta.style.pointerEvents = 'none';
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
-  } catch {
-    return false;
   }
 }
 
@@ -176,6 +127,9 @@ function bootstrap(): void {
   const hudBest = requireElement<HTMLElement>('hud-best');
   const hudCombo = requireElement<HTMLElement>('hud-combo');
   const hudComboVal = requireElement<HTMLElement>('hud-combo-val');
+  const hudChallenge = requireElement<HTMLElement>('hud-challenge');
+  const hudChallengeLabel = requireElement<HTMLElement>('hud-challenge-label');
+  const hudChallengeVal = requireElement<HTMLElement>('hud-challenge-val');
   const btnRestart = requireElement<HTMLButtonElement>('btn-restart');
   const btnMute = requireElement<HTMLButtonElement>('btn-mute');
   const iconSoundOn = requireElement<Element>('icon-sound-on');
@@ -217,7 +171,6 @@ function bootstrap(): void {
   const btnVictoryNextKey = requireElement<HTMLElement>('btn-victory-next-key');
   const btnVictoryReplay = requireElement<HTMLButtonElement>('btn-victory-replay');
   const btnVictoryShare = requireElement<HTMLButtonElement>('btn-victory-share');
-  const btnVictoryShareLabel = requireElement<HTMLElement>('btn-victory-share-label');
 
   const gameoverOverlay = requireElement<HTMLElement>('gameover-overlay');
   const gameoverReason = requireElement<HTMLElement>('gameover-reason');
@@ -230,7 +183,19 @@ function bootstrap(): void {
   const btnPlayAgain = requireElement<HTMLButtonElement>('btn-play-again');
   const btnPlayAgainLabel = requireElement<HTMLElement>('btn-play-again-label');
   const btnShare = requireElement<HTMLButtonElement>('btn-share');
-  const btnShareLabel = requireElement<HTMLElement>('btn-share-label');
+
+  const shareModal = requireElement<HTMLElement>('share-modal');
+  const btnShareClose = requireElement<HTMLButtonElement>('btn-share-close');
+  const sharePreviewLink = requireElement<HTMLAnchorElement>('share-preview-link');
+  const sharePreviewUrl = requireElement<HTMLElement>('share-preview-url');
+  const shareCardPreview = requireElement<HTMLImageElement>('share-card-preview');
+  const btnShareFb = requireElement<HTMLButtonElement>('btn-share-fb');
+  const btnShareIg = requireElement<HTMLButtonElement>('btn-share-ig');
+  const btnShareX = requireElement<HTMLButtonElement>('btn-share-x');
+  const btnShareCopy = requireElement<HTMLButtonElement>('btn-share-copy');
+  const btnShareCopyLabel = requireElement<HTMLElement>('btn-share-copy-label');
+  const btnShareDownload = requireElement<HTMLButtonElement>('btn-share-download');
+  const shareStatus = requireElement<HTMLElement>('share-status');
 
   const initialRoute = readInitialRouteFromUrl();
   const audio = new AudioEngine();
@@ -239,7 +204,8 @@ function bootstrap(): void {
       audio.handleEvent(event);
     },
     initialRoute.mode,
-    initialRoute.sectorId
+    initialRoute.sectorId,
+    initialRoute.unlockAll
   );
   const renderer = new GameRenderer(canvas);
 
@@ -354,51 +320,66 @@ function bootstrap(): void {
     ui.aiming = false;
   }
 
+  const challengeTarget = initialRoute.beatScore;
+  const challengeMode = initialRoute.mode;
+  const challengeSectorId = initialRoute.sectorId ?? engine.state.adventureSectorId;
+  let challengeBeatenShown: boolean | null = null;
+  let cachedShareBlob: Blob | null = null;
+  let cachedSharePreviewUrl: string | null = null;
+
+  function revokeSharePreview(): void {
+    if (cachedSharePreviewUrl) {
+      URL.revokeObjectURL(cachedSharePreviewUrl);
+      cachedSharePreviewUrl = null;
+    }
+    cachedShareBlob = null;
+    shareCardPreview.removeAttribute('src');
+  }
+
   function resetShareFeedback(): void {
     if (shareResetTimer !== null) {
       window.clearTimeout(shareResetTimer);
       shareResetTimer = null;
     }
-    btnShare.classList.remove('is-copied');
-    btnShareLabel.textContent = 'Share';
-    btnVictoryShare.classList.remove('is-copied');
-    btnVictoryShareLabel.textContent = 'Share';
+    btnShareCopyLabel.textContent = 'Copy Link';
+    shareStatus.textContent = '';
   }
 
-  function showShareFeedback(button: HTMLButtonElement, labelEl: HTMLElement, text: string): void {
+  function setShareStatus(message: string, copyBtnLabel?: string): void {
     resetShareFeedback();
-    button.classList.add('is-copied');
-    labelEl.textContent = text;
+    shareStatus.textContent = message;
+    if (copyBtnLabel) {
+      btnShareCopyLabel.textContent = copyBtnLabel;
+    }
     shareResetTimer = window.setTimeout(() => {
       resetShareFeedback();
-    }, 1800);
+    }, 2400);
   }
 
-  function triggerShare(button: HTMLButtonElement, labelEl: HTMLElement): void {
-    const text = buildShareText(engine.state);
-    const isTouchDevice =
-      typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  function closeShareModal(): void {
+    if (shareModal.hidden) return;
+    shareModal.hidden = true;
+    resetShareFeedback();
+    revokeSharePreview();
+  }
 
-    if (isTouchDevice && typeof navigator.share === 'function') {
-      void navigator
-        .share({ title: 'Orbit Sling', text })
-        .then(() => {
-          showShareFeedback(button, labelEl, 'Shared');
-        })
-        .catch((err: unknown) => {
-          // Ignore user-cancelled share sheets; fall back to clipboard on real errors
-          if (err instanceof Error && err.name === 'AbortError') {
-            return;
-          }
-          void copyTextToClipboard(text).then((copied) => {
-            if (copied) showShareFeedback(button, labelEl, 'Copied');
-          });
-        });
-    } else {
-      void copyTextToClipboard(text).then((copied) => {
-        if (copied) showShareFeedback(button, labelEl, 'Copied');
-      });
-    }
+  function openShareModal(): void {
+    resetShareFeedback();
+    revokeSharePreview();
+    const challengeUrl = buildShareUrl(
+      engine.state.mode,
+      engine.state.adventureSectorId,
+      engine.state.score
+    );
+    sharePreviewLink.href = challengeUrl || window.location.href;
+    sharePreviewUrl.textContent = challengeUrl.replace(/^https?:\/\//, '') || window.location.host;
+    shareModal.hidden = false;
+    void renderScoreCardBlob(engine.state).then((blob) => {
+      if (!blob || shareModal.hidden) return;
+      cachedShareBlob = blob;
+      cachedSharePreviewUrl = URL.createObjectURL(blob);
+      shareCardPreview.src = cachedSharePreviewUrl;
+    });
   }
 
   function syncAdventurePanel(activeSectorId: number): void {
@@ -489,7 +470,7 @@ function bootstrap(): void {
 
   function switchMode(mode: GameMode): void {
     releaseActivePointer(activePointerId ?? undefined);
-    resetShareFeedback();
+    closeShareModal();
     engine.setMode(mode);
     syncRouteToUrl(engine.state.mode, engine.state.adventureSectorId);
     syncUI(engine.state);
@@ -497,7 +478,7 @@ function bootstrap(): void {
 
   function selectSector(sectorId: number): void {
     releaseActivePointer(activePointerId ?? undefined);
-    resetShareFeedback();
+    closeShareModal();
     engine.selectSector(sectorId);
     syncRouteToUrl(engine.state.mode, engine.state.adventureSectorId);
     syncUI(engine.state);
@@ -505,7 +486,7 @@ function bootstrap(): void {
 
   function advanceToNextSector(): void {
     releaseActivePointer(activePointerId ?? undefined);
-    resetShareFeedback();
+    closeShareModal();
     const advanced = engine.nextSector();
     if (!advanced) {
       engine.reset();
@@ -516,7 +497,7 @@ function bootstrap(): void {
 
   function restartGame(): void {
     releaseActivePointer(activePointerId ?? undefined);
-    resetShareFeedback();
+    closeShareModal();
     engine.reset();
     syncUI(engine.state);
   }
@@ -561,6 +542,25 @@ function bootstrap(): void {
     if (state.score !== ui.score) {
       ui.score = state.score;
       hudScore.textContent = String(state.score);
+    }
+
+    // Challenge target pill when entering via a shared ?beat=N link
+    const challengeActive =
+      challengeTarget !== null &&
+      state.mode === challengeMode &&
+      (challengeMode === 'endless' || state.adventureSectorId === challengeSectorId);
+    if (challengeActive && challengeTarget !== null) {
+      const beaten = state.score > challengeTarget;
+      if (hudChallenge.hidden || beaten !== challengeBeatenShown) {
+        challengeBeatenShown = beaten;
+        hudChallenge.hidden = false;
+        hudChallenge.classList.toggle('is-beaten', beaten);
+        hudChallengeLabel.textContent = beaten ? 'BEATEN' : 'BEAT';
+        hudChallengeVal.textContent = beaten ? `${challengeTarget} ✓` : String(challengeTarget);
+      }
+    } else if (!hudChallenge.hidden) {
+      hudChallenge.hidden = true;
+      challengeBeatenShown = null;
     }
 
     const bestDisplay = isAdventure
@@ -887,7 +887,7 @@ function bootstrap(): void {
   btnVictoryShare.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation();
     audio.unlock();
-    triggerShare(btnVictoryShare, btnVictoryShareLabel);
+    openShareModal();
     btnVictoryShare.blur();
   });
 
@@ -908,8 +908,68 @@ function bootstrap(): void {
   btnShare.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation();
     audio.unlock();
-    triggerShare(btnShare, btnShareLabel);
+    openShareModal();
     btnShare.blur();
+  });
+
+  // Share Sheet Modal actions
+  shareModal.addEventListener('pointerdown', (e: PointerEvent) => {
+    e.stopPropagation();
+    const target = e.target as Element | null;
+    if (!target?.closest('.share-sheet')) {
+      closeShareModal();
+    }
+  });
+
+  btnShareClose.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    closeShareModal();
+  });
+
+  btnShareFb.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    window.open(buildFacebookShareUrl(engine.state), '_blank', 'noopener,noreferrer');
+    setShareStatus('Opening Facebook share...');
+    btnShareFb.blur();
+  });
+
+  btnShareIg.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    void shareForInstagram(engine.state, cachedShareBlob).then((outcome) => {
+      if (outcome === 'shared') {
+        setShareStatus('Shared + link copied for IG sticker!');
+      } else if (outcome === 'saved') {
+        setShareStatus('PNG saved + link copied for IG sticker!');
+      }
+    });
+    btnShareIg.blur();
+  });
+
+  btnShareX.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    window.open(buildXShareUrl(engine.state), '_blank', 'noopener,noreferrer');
+    setShareStatus('Opening X post...');
+    btnShareX.blur();
+  });
+
+  btnShareCopy.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    void copyTextToClipboard(buildShareText(engine.state)).then((copied) => {
+      if (copied) {
+        setShareStatus('Copied challenge card & link!', 'Copied ✓');
+      }
+    });
+    btnShareCopy.blur();
+  });
+
+  btnShareDownload.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    void downloadScoreCard(engine.state, cachedShareBlob).then((saved) => {
+      if (saved) {
+        setShareStatus('Saved 1080×1080 PNG card!');
+      }
+    });
+    btnShareDownload.blur();
   });
 
   btnRestart.addEventListener('pointerdown', (e: PointerEvent) => {
@@ -955,11 +1015,20 @@ function bootstrap(): void {
     }
 
     if (e.key === 'Escape') {
+      if (!shareModal.hidden) {
+        e.preventDefault();
+        closeShareModal();
+        return;
+      }
       if (engine.state.aim.active) {
         e.preventDefault();
         engine.cancelAim();
         releaseActivePointer(activePointerId ?? undefined);
       }
+      return;
+    }
+
+    if (!shareModal.hidden) {
       return;
     }
 
